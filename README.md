@@ -178,6 +178,8 @@ Per-zip folders are named from each zip's path **relative to** `INPUT_DIR` (e.g.
 | **LAVA** | Link to the `_lava_data.lava` file. |
 | **Status** | `ok` / `failed` / `skipped` / `dry-run`, color-coded. |
 
+The page is styled to match **[leapps.org](https://leapps.org)** — dark gold-on-black theme, Barlow fonts, the LEAPPs logo, and a per-tool accent color (iLEAPP red, ALEAPP green, RLEAPP blue, VLEAPP purple) on the title. A summary of ok/failed/skipped counts sits in the header. The logo and favicon are **embedded** in the HTML (base64), so the page needs no external image files; the web fonts load from Google Fonts when online and fall back to system fonts offline.
+
 All links are **relative**, so the whole `OUTPUT_DIR` is portable — zip it, move it, or drop it on a share and the links still resolve. The report and LAVA files are located by scanning each output folder, so they're found wherever the tool writes them. If a tool doesn't emit a `.lava` file, that cell simply shows `—`.
 
 ---
