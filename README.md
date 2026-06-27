@@ -97,6 +97,16 @@ python batch_leapp.py INPUT_DIR OUTPUT_DIR --leapp /path/to/<x>leapp.py -j 4
 - In parallel mode each run's output is captured to `<tool>_run.log` (e.g. `aleapp_run.log`) inside that extraction's folder, so concurrent runs don't garble the terminal; the screen shows just `OK` / `FAILED` / `TIMEOUT` per zip as they finish.
 - With `-j 1` (the default), the tool's output streams live as usual.
 
+### Why parallel runs need isolation
+
+LEAPP tools keep one **shared** history/settings file (e.g. macOS `~/Library/Application Support/LEAPP/history.json`) and update it with a read-modify-write that uses a fixed temp filename. Two tools running at once race on that file — one wins the rename, the other dies with `history.tmp -> history.json: No such file`, and a later read sees a half-written file (`JSONDecodeError: Extra data`).
+
+To avoid this, **parallel runs (`-j > 1`) each get a private config dir** at `<output>/<zip>/.leapp_home/`, set via `HOME` / `APPDATA` / `XDG_CONFIG_HOME`. Consequences:
+
+- Concurrent runs never touch the same history file, so no corruption.
+- Your real, user-level LEAPP history is left untouched and parallel runs are **not** recorded in it (an empty private config dir means history recording is simply off for those runs).
+- Sequential runs (`-j 1`) use your normal config dir and record history as usual.
+
 > **Caution:** LEAPP runs are CPU-, disk-, and RAM-heavy. On a typical workstation `-j 2`–`-j 4` is a sane range. Pushing to your full core count can thrash disk I/O and run *slower* — and large extractions can exhaust memory. Start conservative.
 
 ---
@@ -135,6 +145,7 @@ OUTPUT_DIR/
 ├── index.html                      ← master index (open this)
 ├── caseA_phone/                    ← one folder per zip
 │   ├── ileapp_run.log              ← captured tool output (parallel mode)
+│   ├── .leapp_home/                ← private config dir (parallel mode only)
 │   └── iLEAPP_Reports_<timestamp>/
 │       ├── index.html              ← the LEAPP report
 │       └── _lava_data.lava         ← the LAVA file

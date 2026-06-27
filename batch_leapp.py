@@ -16,6 +16,7 @@ which is the shared CLI of iLEAPP, ALEAPP, RLEAPP and VLEAPP.
 
 import argparse
 import html
+import os
 import subprocess
 import sys
 import time
@@ -78,20 +79,42 @@ def href(target: Path, base: Path) -> str:
     return quote(rel)
 
 
-def run_job(job: dict, timeout, capture: bool) -> dict:
-    """Run one iLEAPP subprocess. When capture is True (parallel mode) the
+def isolated_env(dest: Path):
+    """Return an environment that points the LEAPP tool's *shared* config dir
+    (history.json / settings.json) at a private folder under dest.
+
+    LEAPP tools keep one shared history file and update it with a
+    read-modify-write that uses a fixed temp filename. Two tools running at
+    once race on that file and corrupt it. Giving each parallel run its own
+    config dir removes the contention entirely. The dir is derived from HOME
+    (macOS), APPDATA (Windows) and XDG_CONFIG_HOME (Linux), so we set all three.
+    """
+    private = dest / ".leapp_home"
+    private.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env["HOME"] = str(private)             # macOS: ~/Library/Application Support/LEAPP
+    env["APPDATA"] = str(private)          # Windows: %APPDATA%/LEAPP
+    env["XDG_CONFIG_HOME"] = str(private)  # Linux: $XDG_CONFIG_HOME/LEAPP
+    return env
+
+
+def run_job(job: dict, timeout, capture: bool, isolate: bool = False) -> dict:
+    """Run one LEAPP subprocess. When capture is True (parallel mode) the
     combined output is captured and written to a per-job log file so concurrent
-    runs don't garble the terminal. Returns a result dict."""
+    runs don't garble the terminal. When isolate is True each run gets a private
+    config dir so concurrent runs don't corrupt the shared history file.
+    Returns a result dict."""
     start = time.time()
+    env = isolated_env(job["dest"]) if isolate else None
     try:
         if capture:
             proc = subprocess.run(
-                job["cmd"], timeout=timeout, text=True,
+                job["cmd"], timeout=timeout, text=True, env=env,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             )
             output = proc.stdout
         else:
-            proc = subprocess.run(job["cmd"], timeout=timeout)
+            proc = subprocess.run(job["cmd"], timeout=timeout, env=env)
             output = None
         rc, error = proc.returncode, None
     except subprocess.TimeoutExpired as e:
@@ -324,7 +347,8 @@ def main():
                 record(run_job(job, args.timeout, capture=False))
         else:
             with ThreadPoolExecutor(max_workers=workers) as pool:
-                futures = {pool.submit(run_job, job, args.timeout, capture): job
+                futures = {pool.submit(run_job, job, args.timeout, capture,
+                                       isolate=True): job
                            for job in jobs}
                 for fut in as_completed(futures):
                     record(fut.result())
