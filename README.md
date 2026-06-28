@@ -43,16 +43,7 @@ python batch_leapp_gui.py
 
 Pick the input dir, output dir, and LEAPP tool, set parallel jobs, and click **Run** — a live log streams in the window, with **Stop**, **Open report index**, and **Open output folder** buttons. It tries to auto-detect an installed LEAPP tool to prefill the field.
 
-#### macOS app (double-clickable)
-
-To build a standalone `Batch LEAPP.app` (bundles Python + Tk, no terminal needed):
-
-```bash
-python3 -m pip install pyinstaller   # one-time
-./build_macos.sh                     # → dist/Batch LEAPP.app
-```
-
-Drag the `.app` to `/Applications`. It's **unsigned**: on the machine that built it, it opens normally; if you zip and share it, the recipient right-clicks → **Open** the first time (or runs `xattr -dr com.apple.quarantine "Batch LEAPP.app"`) to clear Gatekeeper. The build is for the Mac's own architecture (Apple Silicon or Intel).
+Prefer a double-clickable app with no terminal? See **[Building standalone binaries](#building-standalone-binaries)** below.
 
 ### Command line
 
@@ -108,6 +99,51 @@ open /Volumes/Cases/ios_reports/index.html
 | `--skip-existing` | off | Skip a zip whose output folder already exists and is non-empty (resume a partial run). |
 | `--dry-run` | off | Print the exact commands without running the tool. |
 | `-- <args>` | — | Everything after a literal `--` is appended verbatim to every LEAPP run (e.g. `-- -p fast` for an iLEAPP profile). |
+
+---
+
+## Building standalone binaries
+
+You can package batch-leapp into native binaries that don't need Python installed — a double-clickable **GUI app** and a single-file **CLI binary** — using [PyInstaller](https://pyinstaller.org/). Build scripts and icons are included.
+
+> **Cross-compiling isn't supported:** build the macOS binaries on a Mac and the Windows binaries on Windows. Each build also targets the machine's own CPU architecture (Apple Silicon vs Intel, x64 vs ARM).
+
+One-time setup on each machine:
+
+```bash
+python3 -m pip install pyinstaller
+```
+
+### macOS
+
+```bash
+./build_macos.sh          # both: dist/Batch LEAPP.app  +  dist/batch-leapp
+./build_macos.sh gui      # just the .app
+./build_macos.sh cli      # just the CLI binary
+```
+
+Drag `Batch LEAPP.app` to `/Applications`. To share it, zip with `ditto` (preserves the bundle):
+
+```bash
+ditto -c -k --sequesterRsrc --keepParent "dist/Batch LEAPP.app" Batch-LEAPP-macos.zip
+```
+
+### Windows
+
+```bat
+build_windows.bat         :: both: dist\Batch LEAPP.exe  +  dist\batch-leapp.exe
+build_windows.bat gui     :: just the GUI .exe
+build_windows.bat cli     :: just the CLI .exe
+```
+
+### Signing & first-run warnings
+
+The binaries are **unsigned** (notarizing/signing needs a paid Apple Developer ID or a Windows code-signing certificate). They run fine on the machine that built them; when shared:
+
+- **macOS** — Gatekeeper says "Apple cannot check it for malicious software." Right-click → **Open** once, or run `xattr -dr com.apple.quarantine "Batch LEAPP.app"`.
+- **Windows** — SmartScreen shows "Windows protected your PC." Click **More info → Run anyway**.
+
+If you have signing certificates, add the `codesign`/`signtool` step to the build scripts and I can wire it in.
 
 ---
 

@@ -167,6 +167,16 @@ def _macos_app_executable(app: Path) -> Path:
     return macos / (name or app.stem)
 
 
+def default_python() -> str:
+    """Interpreter used to run a .py LEAPP tool. In a PyInstaller build,
+    sys.executable is THIS frozen binary (not Python), so fall back to a real
+    python on PATH — otherwise running a .py tool would re-invoke batch-leapp."""
+    if getattr(sys, "frozen", False):
+        import shutil
+        return shutil.which("python3") or shutil.which("python") or "python3"
+    return sys.executable
+
+
 def leapp_command_prefix(leapp: Path, python: str) -> list:
     """Command prefix to invoke a LEAPP tool — supports .py scripts as well as
     packaged binaries and macOS .app bundles (all share the -t/-i/-o CLI)."""
@@ -645,7 +655,7 @@ class BatchError(Exception):
     """A user-facing problem (bad input dir, missing LEAPP tool, etc.)."""
 
 
-def run_batch(input_dir, output_dir, leapp, *, python=sys.executable,
+def run_batch(input_dir, output_dir, leapp, *, python=None,
               type="auto", jobs=1, timeout=None, heartbeat=30,
               skip_existing=False, dry_run=False, capture=None,
               hashes=True, extra_args=None, log=print, should_stop=None):
@@ -670,6 +680,7 @@ def run_batch(input_dir, output_dir, leapp, *, python=sys.executable,
     workers = max(1, int(jobs))
     if capture is None:
         capture = workers > 1
+    python = python or default_python()
     force_type = None if (not type or str(type).lower() == "auto") else str(type)
     extra = list(extra_args or [])
     do_hash = bool(hashes) and not dry_run
@@ -901,8 +912,10 @@ def build_arg_parser():
         help="Path to the LEAPP script OR compiled binary / macOS .app "
              "(ileapp.py, ileapp, iLEAPP.exe, iLEAPP.app, ...)",
     )
-    parser.add_argument("--python", default=sys.executable,
-                        help="Python interpreter used to run a .py LEAPP tool")
+    parser.add_argument("--python", default=None,
+                        help="Python interpreter used to run a .py LEAPP tool "
+                             "(default: this interpreter, or a python on PATH "
+                             "when running as a packaged binary)")
     parser.add_argument("-t", "--type", default="auto",
                         help="LEAPP extraction type for -t. 'auto' (default) "
                              "picks zip/tar/gz per file; any other value forces "
