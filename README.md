@@ -8,7 +8,7 @@ Point it at a directory of extractions, walk away, and come back to a review-rea
 
 ## What it does
 
-- **Recursively** finds every archive (`.zip`, `.tar`, `.tar.gz`/`.tgz`, `.gz`) under the input directory and auto-selects the matching `-t` type per file.
+- **Recursively** finds every *extraction* archive (`.zip`, `.tar`, `.tar.gz`/`.tgz`, gzipped-tar `.gz`) under the input directory and auto-selects the matching `-t` type per file. It deliberately **ignores prior LEAPP report folders** (`*LEAPP_Reports_*`) and lone non-tar `.gz` files (browser-cache blobs, single logs) so it doesn't mistake report artifacts for extractions.
 - Runs your chosen LEAPP tool on each archive into **its own output folder**, so reports never overwrite each other.
 - **Hashes every input** (SHA-256) and writes a **manifest** (`manifest.csv` + `manifest.json`) documenting what was processed — chain-of-custody for your case file.
 - **Pre-checks each archive** and flags a corrupt/mislabeled one as `invalid` instead of letting the LEAPP run crash.
@@ -310,4 +310,5 @@ All links are **relative**, so the whole `OUTPUT_DIR` is portable — zip it, mo
 - Rows for **failed**, **invalid**, or **skipped** extractions still appear in the index and manifest; report/LAVA links show only when those files actually exist.
 - **Corrupt or mislabeled archives are flagged, not fatal.** Each archive is integrity-checked (zip central directory / tar header) before the LEAPP run; a bad one is marked `invalid` and the batch moves on.
 - **macOS AppleDouble files are ignored.** On non-HFS volumes (exFAT, NTFS, SMB shares) macOS drops a `._name.zip` companion next to each real file. These are not archives, so they're skipped — otherwise a LEAPP tool would choke on one with `BadZipFile: File is not a zip file`.
+- **Prior LEAPP reports and stray `.gz` files don't get re-processed.** The scan never descends into `*LEAPP_Reports_*` folders, skips the output directory, and treats a bare `.gz` as an extraction only when it's actually a gzipped tar — so the thousands of tiny browser-cache `.gz` files inside an existing report are not picked up as "extractions."
 - The script is self-contained — copy it anywhere; it doesn't depend on this repository.

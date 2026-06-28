@@ -20,6 +20,7 @@ import hashlib
 import html
 import json
 import os
+import re
 import subprocess
 import sys
 import tarfile
@@ -58,20 +59,51 @@ def archive_kind(path: Path):
     return None, None
 
 
-def find_archives(root: Path, kinds=None):
-    """Return every supported archive under root, recursively, sorted.
+# Directories from a previous LEAPP run (e.g. 'iLEAPP_Reports_2026-..',
+# 'ALEAPP_Reports_..'). We never descend into these: they hold report artifacts
+# — including thousands of tiny browser-cache .gz files — that are NOT extractions.
+LEAPP_REPORT_DIR_RE = re.compile(r"leapp_reports_", re.IGNORECASE)
+
+
+def _is_gzipped_tar(path: Path) -> bool:
+    try:
+        return tarfile.is_tarfile(path)
+    except (OSError, tarfile.TarError):
+        return False
+
+
+def find_archives(root: Path, kinds=None, exclude=None):
+    """Return every supported *extraction* archive under root, sorted.
 
     Yields (path, leapp_type, matched_ext). `kinds` optionally restricts to a set
-    of -t values (e.g. {"zip"}). Skips macOS AppleDouble companions ('._name'),
-    the resource-fork files macOS scatters on exFAT/NTFS/SMB volumes — they share
-    an archive extension but are not archives, so a LEAPP tool would choke.
+    of -t values (e.g. {"zip"}). `exclude` is a set of directories to skip.
+
+    Guards against grabbing things that aren't extractions:
+      - skips macOS AppleDouble companions ('._name');
+      - does NOT descend into prior LEAPP report folders ('*LEAPP_Reports_*') or
+        excluded dirs (e.g. the output dir);
+      - a bare '.gz' counts only if it's a gzipped TAR — a lone gzipped file
+        (browser cache, a single log, etc.) is not a filesystem extraction.
     """
+    exclude = {Path(e).resolve() for e in (exclude or [])}
     out = []
-    for p in root.rglob("*"):
-        if not p.is_file() or p.name.startswith("._"):
-            continue
-        kind, ext = archive_kind(p)
-        if kind and (kinds is None or kind in kinds):
+    for dirpath, dirnames, filenames in os.walk(root):
+        here = Path(dirpath)
+        # Prune: don't recurse into report folders or excluded subtrees.
+        dirnames[:] = [
+            dn for dn in dirnames
+            if not LEAPP_REPORT_DIR_RE.search(dn)
+            and (here / dn).resolve() not in exclude
+        ]
+        for fn in filenames:
+            if fn.startswith("._"):
+                continue
+            p = here / fn
+            kind, ext = archive_kind(p)
+            if not kind or (kinds is not None and kind not in kinds):
+                continue
+            if ext == ".gz" and not _is_gzipped_tar(p):
+                continue                          # lone .gz → not an extraction
             out.append((p, kind, ext))
     return sorted(out, key=lambda t: t[0].as_posix())
 
@@ -695,7 +727,7 @@ def run_batch(input_dir, output_dir, leapp, *, python=None,
     if not dry_run and not leapp_target_ok(leapp):
         raise BatchError(f"LEAPP tool not found: {leapp}")
 
-    archives = find_archives(input_dir)
+    archives = find_archives(input_dir, exclude=[output_dir])
     result = {"ok": [], "failed": [], "invalid": [], "skipped": [],
               "index": None, "manifest": None, "start": None, "end": None,
               "elapsed": 0.0, "total": len(archives), "tool": tool}
