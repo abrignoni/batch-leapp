@@ -29,7 +29,7 @@ if "%WHAT%"=="gui" goto gui
 goto cli
 
 :gui
-py -m PyInstaller --noconfirm --windowed --clean ^
+py -m PyInstaller --noconfirm --onefile --windowed --clean ^
     --name "Batch LEAPP" ^
     --icon leapps.ico ^
     batch_leapp_gui.py

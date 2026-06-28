@@ -145,6 +145,18 @@ The binaries are **unsigned** (notarizing/signing needs a paid Apple Developer I
 
 If you have signing certificates, add the `codesign`/`signtool` step to the build scripts and I can wire it in.
 
+### Automated builds (GitHub Actions)
+
+[`.github/workflows/build.yml`](.github/workflows/build.yml) builds everything in the cloud — **macOS (Apple Silicon + Intel)** and **Windows**, GUI and CLI — so you don't need a Windows machine. Two ways to run it:
+
+- **On demand:** GitHub → **Actions** tab → **Build binaries** → **Run workflow**. The binaries appear as downloadable **artifacts** on the run page.
+- **On a release:** push a version tag and the binaries are attached to a GitHub **Release** automatically:
+  ```bash
+  git tag v1.0.0 && git push origin v1.0.0
+  ```
+
+Artifacts produced: `Batch-LEAPP-macos-arm64.zip`, `Batch-LEAPP-macos-x86_64.zip` (each with the `.app`), the matching `batch-leapp` CLI tarballs, and `Batch-LEAPP-windows-x64.zip` (GUI + CLI `.exe`). They're still unsigned — the same first-run steps apply.
+
 ---
 
 ## Recommended first run
