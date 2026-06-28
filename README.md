@@ -8,15 +8,14 @@ Point it at a directory of extractions, walk away, and come back to a review-rea
 
 ## What it does
 
-- **Recursively** finds every `.zip` (case-insensitive) under the input directory.
-- Runs your chosen LEAPP tool on each zip into **its own output folder**, so reports never overwrite each other.
-- Writes a **master `index.html`** at the root of the output directory with one row per extraction, linking:
-  - the report folder,
-  - the LEAPP `index.html`,
-  - the `_lava_data.lava` file (when the tool produces one).
-- Adds a **Source dir** column showing the top-level directory each zip came from (handy for grouping by case).
-- **Keeps going on failure** — one bad zip won't stop the batch — and prints an ok/failed/skipped summary at the end.
-- Optionally runs **multiple LEAPP processes in parallel**.
+- **Recursively** finds every archive (`.zip`, `.tar`, `.tar.gz`/`.tgz`, `.gz`) under the input directory and auto-selects the matching `-t` type per file.
+- Runs your chosen LEAPP tool on each archive into **its own output folder**, so reports never overwrite each other.
+- **Hashes every input** (SHA-256) and writes a **manifest** (`manifest.csv` + `manifest.json`) documenting what was processed — chain-of-custody for your case file.
+- **Pre-checks each archive** and flags a corrupt/mislabeled one as `invalid` instead of letting the LEAPP run crash.
+- Writes a **master `index.html`** at the root of the output directory with one row per extraction, linking the report folder, the LEAPP `index.html`, and the `_lava_data.lava` file — plus the input's SHA-256.
+- Adds a **Source dir** column showing the top-level directory each archive came from (handy for grouping by case).
+- **Keeps going on failure** — one bad archive won't stop the batch — and prints an ok/failed/invalid/skipped summary at the end.
+- Optionally runs **multiple LEAPP processes in parallel**, and can pass **extra arguments** straight through to the tool.
 
 iLEAPP, ALEAPP, RLEAPP and VLEAPP all share the same command line — `python <x>leapp.py -t zip -i <zip> -o <out>` — so the same script drives any of them. The tool is auto-detected from the script filename you pass to `--leapp` and used for labels, the per-job log filename, and the index title.
 
@@ -90,12 +89,14 @@ open /Volumes/Cases/ios_reports/index.html
 |---|---|---|
 | `--leapp PATH` | `ileapp.py` | Path to the LEAPP **script** (`ileapp.py` …) **or compiled binary / macOS `.app`**. `--ileapp` is accepted as an alias. |
 | `--python PATH` | current interpreter | Python used to run a `.py` tool (point at the tool's venv if it has one). Ignored for binaries. |
-| `-t`, `--type TYPE` | `zip` | Extraction type passed with `-t`. |
+| `-t`, `--type TYPE` | `auto` | `auto` picks the `-t` value (`zip`/`tar`/`gz`) per file from its extension. Any other value forces that type for every archive. |
 | `-j`, `--jobs N` | `1` | Number of LEAPP runs to execute in parallel. |
 | `--heartbeat SECONDS` | `30` | In parallel mode, print a "still running" line every N seconds so long runs don't look hung (`0` disables). |
 | `--timeout SECONDS` | none | Per-zip timeout; a run exceeding it is marked failed and the batch continues. |
+| `--no-hash` | off | Skip computing the SHA-256 of each input archive (hashing is on by default). |
 | `--skip-existing` | off | Skip a zip whose output folder already exists and is non-empty (resume a partial run). |
 | `--dry-run` | off | Print the exact commands without running the tool. |
+| `-- <args>` | — | Everything after a literal `--` is appended verbatim to every LEAPP run (e.g. `-- -p fast` for an iLEAPP profile). |
 
 ---
 
@@ -180,7 +181,9 @@ The same start/finish/elapsed times also appear in the master index header.
 ```
 OUTPUT_DIR/
 ├── index.html                      ← master index (open this)
-├── caseA_phone/                    ← one folder per zip
+├── manifest.csv                    ← run manifest: hash, status, paths, times
+├── manifest.json                   ← same, machine-readable, + run metadata
+├── caseA_phone/                    ← one folder per archive
 │   ├── ileapp_run.log              ← captured tool output (parallel mode)
 │   ├── .leapp_home/                ← private config dir (parallel mode only)
 │   └── iLEAPP_Reports_<timestamp>/
@@ -201,12 +204,22 @@ Per-zip folders are named from each zip's path **relative to** `INPUT_DIR` (e.g.
 
 | Column | Meaning |
 |---|---|
-| **Source dir** | Top-level directory the zip came from (e.g. `caseA`). Falls back to `INPUT_DIR`'s name for zips sitting directly in it. |
-| **Zip** | The zip's path relative to `INPUT_DIR`. |
+| **Source dir** | Top-level directory the archive came from (e.g. `caseA`). Falls back to `INPUT_DIR`'s name for archives sitting directly in it. |
+| **Zip** | The archive's path relative to `INPUT_DIR`. |
 | **Report folder** | Link to that extraction's output directory. |
 | **Report** | Link straight to the LEAPP `index.html`. Opens in a new tab. |
 | **LAVA** | Opens the `_lava_data.lava` project. Mirrors the LEAPP GUIs (see below). |
-| **Status** | `ok` / `failed` / `skipped` / `dry-run`, color-coded. |
+| **Status** | `ok` / `failed` / `invalid` / `skipped` / `dry-run`, color-coded. |
+| **SHA-256** | First 16 chars of the input archive's hash; hover for the full digest. |
+
+### Forensic documentation (hashes & manifest)
+
+Every run writes two manifests at the root of `OUTPUT_DIR`:
+
+- **`manifest.csv`** — one row per extraction: source dir, archive path, **SHA-256**, status, `-t` type, elapsed seconds, output folder, and the relative paths to the report and `.lava`.
+- **`manifest.json`** — the same rows plus run metadata (tool, input/output dirs, start/finish, elapsed, counts, hash algorithm).
+
+Hashing is on by default (stream-read, so it handles huge full-file-system extractions without exhausting RAM). Disable it with `--no-hash` if you only want the reports.
 
 The page is styled to match **[leapps.org](https://leapps.org)** — dark gold-on-black theme, Barlow fonts, the LEAPPs logo, and a per-tool accent color (iLEAPP red, ALEAPP green, RLEAPP blue, VLEAPP purple) on the title. A summary of ok/failed/skipped counts sits in the header. The logo and favicon are **embedded** in the HTML (base64), so the page needs no external image files; the web fonts load from Google Fonts when online and fall back to system fonts offline.
 
@@ -227,8 +240,9 @@ All links are **relative**, so the whole `OUTPUT_DIR` is portable — zip it, mo
 
 ## Behavior notes
 
-- **Exit code** is `1` if any zip failed, otherwise `0` — convenient for scripting.
-- **Ctrl-C** stops launching new work and still writes the master index for whatever finished.
-- Rows for **failed** or **skipped** extractions still appear in the index; report/LAVA links show only when those files actually exist.
+- **Exit code** is `1` if any archive failed or was invalid, otherwise `0` — convenient for scripting.
+- **Ctrl-C** stops launching new work and still writes the master index and manifest for whatever finished.
+- Rows for **failed**, **invalid**, or **skipped** extractions still appear in the index and manifest; report/LAVA links show only when those files actually exist.
+- **Corrupt or mislabeled archives are flagged, not fatal.** Each archive is integrity-checked (zip central directory / tar header) before the LEAPP run; a bad one is marked `invalid` and the batch moves on.
 - **macOS AppleDouble files are ignored.** On non-HFS volumes (exFAT, NTFS, SMB shares) macOS drops a `._name.zip` companion next to each real file. These are not archives, so they're skipped — otherwise a LEAPP tool would choke on one with `BadZipFile: File is not a zip file`.
 - The script is self-contained — copy it anywhere; it doesn't depend on this repository.

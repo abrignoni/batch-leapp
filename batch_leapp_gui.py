@@ -11,6 +11,7 @@ log. Shares the exact engine the CLI uses (batch_leapp.run_batch).
 
 import os
 import queue
+import shlex
 import subprocess
 import sys
 import threading
@@ -83,10 +84,12 @@ class BatchLeappGUI:
         self.input_dir = tk.StringVar()
         self.output_dir = tk.StringVar()
         self.leapp = tk.StringVar(value=detect_leapp())
-        self.ftype = tk.StringVar(value="zip")
+        self.ftype = tk.StringVar(value="auto")
         self.jobs = tk.IntVar(value=1)
         self.skip_existing = tk.BooleanVar(value=False)
         self.dry_run = tk.BooleanVar(value=False)
+        self.hashes = tk.BooleanVar(value=True)
+        self.extra = tk.StringVar()
 
         self._apply_theme()
         self._build()
@@ -178,11 +181,19 @@ class BatchLeappGUI:
             side="left", padx=(4, 16))
         ttk.Checkbutton(opts, text="Skip existing", variable=self.skip_existing).pack(
             side="left", padx=6)
+        ttk.Checkbutton(opts, text="SHA-256", variable=self.hashes).pack(
+            side="left", padx=6)
         ttk.Checkbutton(opts, text="Dry run", variable=self.dry_run).pack(
             side="left", padx=6)
 
+        extra = ttk.Frame(frm)
+        extra.grid(row=5, column=0, columnspan=3, sticky="we", **pad)
+        ttk.Label(extra, text="Extra LEAPP args").pack(side="left")
+        ttk.Entry(extra, textvariable=self.extra).pack(
+            side="left", fill="x", expand=True, padx=(8, 0))
+
         btns = ttk.Frame(frm)
-        btns.grid(row=5, column=0, columnspan=3, sticky="we", **pad)
+        btns.grid(row=6, column=0, columnspan=3, sticky="we", **pad)
         self.run_btn = ttk.Button(btns, text="Run", command=self._start,
                                   style="Accent.TButton")
         self.run_btn.pack(side="left")
@@ -202,8 +213,8 @@ class BatchLeappGUI:
             bg=SURFACE, fg=TEXT, insertbackground=GOLD, borderwidth=0,
             highlightthickness=1, highlightbackground=BORDER,
             selectbackground=GOLD_DK, selectforeground=OFF_BLACK)
-        self.log.grid(row=6, column=0, columnspan=3, sticky="nsew", **pad)
-        frm.rowconfigure(6, weight=1)
+        self.log.grid(row=7, column=0, columnspan=3, sticky="nsew", **pad)
+        frm.rowconfigure(7, weight=1)
         self.log.tag_configure("ok", foreground=OK_GREEN)
         self.log.tag_configure("fail", foreground=FAIL_RED)
         self.log.tag_configure("muted", foreground=MUTED)
@@ -269,11 +280,22 @@ class BatchLeappGUI:
         self.open_out_btn.configure(state="disabled")
         self.status.configure(text="Running…")
 
+        try:
+            extra_args = shlex.split(self.extra.get())
+        except ValueError as ex:
+            self.run_btn.configure(state="normal")
+            self.stop_btn.configure(state="disabled")
+            self.status.configure(text="Idle")
+            messagebox.showerror("Bad extra args",
+                                 f"Could not parse the Extra LEAPP args:\n{ex}")
+            return
+
         opts = dict(
             input_dir=self.input_dir.get(), output_dir=self.output_dir.get(),
-            leapp=self.leapp.get() or "ileapp.py", type=self.ftype.get() or "zip",
+            leapp=self.leapp.get() or "ileapp.py", type=self.ftype.get() or "auto",
             jobs=max(1, self.jobs.get()), skip_existing=self.skip_existing.get(),
-            dry_run=self.dry_run.get(),
+            dry_run=self.dry_run.get(), hashes=self.hashes.get(),
+            extra_args=extra_args,
         )
         self.worker = threading.Thread(target=self._run_worker, args=(opts,), daemon=True)
         self.worker.start()
@@ -284,6 +306,7 @@ class BatchLeappGUI:
                 opts["input_dir"], opts["output_dir"], opts["leapp"],
                 type=opts["type"], jobs=opts["jobs"],
                 skip_existing=opts["skip_existing"], dry_run=opts["dry_run"],
+                hashes=opts["hashes"], extra_args=opts["extra_args"],
                 capture=True,                      # never spray to stdout
                 log=lambda s: self.q.put(s),
                 should_stop=self.stop_event.is_set,
@@ -321,10 +344,11 @@ class BatchLeappGUI:
             return
         self.last_index = result.get("index")
         self.last_output = Path(self.output_dir.get()).expanduser()
-        n_fail = len(result["failed"])
+        n_inv = len(result.get("invalid", []))
+        inv = f", {n_inv} invalid" if n_inv else ""
         self.status.configure(
-            text=f"Done — {len(result['ok'])} ok, {n_fail} failed, "
-                 f"{len(result['skipped'])} skipped")
+            text=f"Done — {len(result['ok'])} ok, {len(result['failed'])} "
+                 f"failed{inv}, {len(result['skipped'])} skipped")
         if self.last_index:
             self.open_index_btn.configure(state="normal")
         if self.last_output and self.last_output.is_dir():

@@ -15,12 +15,17 @@ which is the shared CLI of iLEAPP, ALEAPP, RLEAPP and VLEAPP.
 """
 
 import argparse
+import csv
+import hashlib
 import html
+import json
 import os
 import subprocess
 import sys
+import tarfile
 import threading
 import time
+import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -32,20 +37,76 @@ LEAPP_LOGO_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAASwAAADkCAY
 FAVICON_DATA_URI = "data:image/png;base64,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"
 
 
-def find_zips(root: Path):
-    """Return every *.zip under root, recursively, case-insensitively, sorted.
+# Archive extensions we can hand to a LEAPP tool, mapped to the -t value to use.
+# Order matters: longer/compound extensions must come before their suffixes so
+# '.tar.gz' wins over '.gz'.
+ARCHIVE_EXTS = (
+    (".tar.gz", "gz"),
+    (".tgz", "gz"),
+    (".tar", "tar"),
+    (".zip", "zip"),
+    (".gz", "gz"),
+)
 
-    Skips macOS AppleDouble companions ('._name.zip') — the small resource-fork
-    files macOS scatters next to real files on non-HFS volumes (exFAT, NTFS,
-    SMB). They end in .zip but are not archives, so feeding them to a LEAPP tool
-    raises 'BadZipFile: File is not a zip file'.
+
+def archive_kind(path: Path):
+    """Return (leapp_type, matched_ext) for a recognised archive, else (None, None)."""
+    name = path.name.lower()
+    for ext, kind in ARCHIVE_EXTS:
+        if name.endswith(ext):
+            return kind, ext
+    return None, None
+
+
+def find_archives(root: Path, kinds=None):
+    """Return every supported archive under root, recursively, sorted.
+
+    Yields (path, leapp_type, matched_ext). `kinds` optionally restricts to a set
+    of -t values (e.g. {"zip"}). Skips macOS AppleDouble companions ('._name'),
+    the resource-fork files macOS scatters on exFAT/NTFS/SMB volumes — they share
+    an archive extension but are not archives, so a LEAPP tool would choke.
     """
-    return sorted(
-        p for p in root.rglob("*")
-        if p.is_file()
-        and p.suffix.lower() == ".zip"
-        and not p.name.startswith("._")
-    )
+    out = []
+    for p in root.rglob("*"):
+        if not p.is_file() or p.name.startswith("._"):
+            continue
+        kind, ext = archive_kind(p)
+        if kind and (kinds is None or kind in kinds):
+            out.append((p, kind, ext))
+    return sorted(out, key=lambda t: t[0].as_posix())
+
+
+def find_zips(root: Path):
+    """Back-compat: every *.zip under root (see find_archives for all types)."""
+    return [p for p, kind, _ in find_archives(root, {"zip"})]
+
+
+def is_valid_archive(path: Path, kind: str) -> bool:
+    """Cheap integrity pre-check so a corrupt/mislabeled file is flagged instead
+    of crashing the LEAPP run. Reads only headers/central directory, not the
+    whole file."""
+    try:
+        if kind == "zip":
+            return zipfile.is_zipfile(path)
+        if kind == "tar":
+            return tarfile.is_tarfile(path)
+        if kind == "gz":
+            if tarfile.is_tarfile(path):          # gzipped tar
+                return True
+            with open(path, "rb") as f:           # plain gzip magic
+                return f.read(2) == b"\x1f\x8b"
+    except OSError:
+        return False
+    return False
+
+
+def sha256_file(path: Path) -> str:
+    """SHA-256 hex digest of a file, streamed so huge extractions don't blow RAM."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 # Display names for the known LEAPP tools, keyed by script stem.
@@ -307,6 +368,19 @@ def write_index(output_dir: Path, entries: list, tool: str = "LEAPP",
         return (f'<a class="{cls}" href="{rel}" data-rel="{rel}" '
                 f'title="{title}">{label}</a>')
 
+    def hash_cell(e):
+        h = e.get("sha256")
+        if not h:
+            return '<span class="missing">&mdash;</span>'
+        return (f'<span class="mono hash" title="SHA-256: {h}">'
+                f'{h[:16]}&hellip;</span>')
+
+    def folder_cell(e):
+        # invalid archives create no output dir — show the name, not a dead link.
+        if not e["dest"].exists():
+            return f'<span class="mono missing">{html.escape(e["dest"].name)}</span>'
+        return cell_link(e["dest"], output_dir, e["dest"].name, "folder")
+
     rows = []
     for e in entries:
         status = e["status"]
@@ -314,20 +388,18 @@ def write_index(output_dir: Path, entries: list, tool: str = "LEAPP",
             "<tr>"
             f'<td class="src">{html.escape(e["root"])}</td>'
             f'<td class="mono">{html.escape(e["zip"])}</td>'
-            f'<td class="mono">{cell_link(e["dest"], output_dir, e["dest"].name, "folder")}</td>'
+            f'<td class="mono">{folder_cell(e)}</td>'
             f'<td>{cell_link(e["index"], output_dir, "report", "btn")}</td>'
             f'<td>{lava_cell(e)}</td>'
             f'<td><span class="badge {status}">{html.escape(status)}</span></td>'
+            f'<td>{hash_cell(e)}</td>'
             "</tr>"
         )
 
-    summary = (
-        f'<span class="badge ok">{counts["ok"]} ok</span>'
-        f'<span class="badge failed">{counts["failed"]} failed</span>'
-        f'<span class="badge skipped">{counts["skipped"]} skipped</span>'
-        + (f'<span class="badge dry-run">{counts["dry-run"]} dry-run</span>'
-           if counts["dry-run"] else "")
-    )
+    order = ["ok", "failed", "invalid", "skipped", "dry-run"]
+    summary = "".join(
+        f'<span class="badge {k}">{counts[k]} {k}</span>'
+        for k in order if counts.get(k))
 
     # Modal CSS / markup / script kept as plain strings (single braces) and
     # injected as f-string *values*, so their braces aren't parsed as fields.
@@ -450,7 +522,7 @@ document.addEventListener('keydown',function(e){
   .meta {{ color:var(--muted); font-size:.85rem; letter-spacing:.04em; margin-top:.15rem; }}
   .summary {{ display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; }}
   .table-wrap {{ overflow-x:auto; }}
-  table {{ border-collapse:collapse; width:100%; font-size:.9rem; min-width:640px; }}
+  table {{ border-collapse:collapse; width:100%; font-size:.9rem; min-width:760px; }}
   thead th {{ font-family:var(--font-head); text-transform:uppercase; letter-spacing:.1em;
              font-size:.78rem; font-weight:600; color:var(--muted); text-align:left;
              padding:.6rem .8rem; background:var(--surface); position:sticky; top:0;
@@ -476,7 +548,9 @@ document.addEventListener('keydown',function(e){
   .badge.ok {{ color:var(--aleapp); border-color:var(--aleapp); }}
   .badge.failed {{ color:var(--ileapp); border-color:var(--ileapp); }}
   .badge.skipped {{ color:var(--gold); border-color:var(--gold); }}
+  .badge.invalid {{ color:#E8762D; border-color:#E8762D; }}
   .badge.dry-run {{ color:var(--muted); border-color:var(--border); }}
+  .hash {{ color:var(--muted); cursor:help; }}
   footer {{ margin-top:2rem; padding-top:1rem; border-top:1px solid var(--border);
            color:var(--muted); font-size:.78rem; letter-spacing:.04em; }}
   footer a {{ color:var(--muted); }}
@@ -495,7 +569,7 @@ document.addEventListener('keydown',function(e){
 <div class="table-wrap">
 <table>
 <thead>
-<tr><th>Source dir</th><th>Zip</th><th>Report folder</th><th>Report</th><th>LAVA</th><th>Status</th></tr>
+<tr><th>Source dir</th><th>Zip</th><th>Report folder</th><th>Report</th><th>LAVA</th><th>Status</th><th>SHA-256</th></tr>
 </thead>
 <tbody>
 {chr(10).join(rows)}
@@ -513,23 +587,80 @@ document.addEventListener('keydown',function(e){
     return index_path
 
 
+def _rel_or_empty(target, base):
+    """Relative POSIX path of target under base, or '' if target is None."""
+    if target is None:
+        return ""
+    try:
+        return Path(target).relative_to(base).as_posix()
+    except ValueError:
+        return str(target)
+
+
+def write_manifest(output_dir: Path, entries: list, tool: str, input_dir: Path,
+                   start_dt, end_dt, elapsed, counts) -> tuple:
+    """Write manifest.csv and manifest.json documenting the run — what was
+    processed, each input's SHA-256, status, and where its report/LAVA live.
+    Returns (csv_path, json_path). Paths are relative to output_dir (portable)."""
+    rows = []
+    for e in entries:
+        rows.append({
+            "source_dir": e["root"],
+            "zip": e["zip"],
+            "sha256": e.get("sha256") or "",
+            "status": e["status"],
+            "type": e.get("type", ""),
+            "elapsed_seconds": ("" if e.get("elapsed") is None
+                                else round(e["elapsed"], 1)),
+            "output_folder": e["dest"].name,
+            "report_html": _rel_or_empty(e.get("index"), output_dir),
+            "lava_file": _rel_or_empty(e.get("lava"), output_dir),
+        })
+
+    csv_path = output_dir / "manifest.csv"
+    fields = ["source_dir", "zip", "sha256", "status", "type",
+              "elapsed_seconds", "output_folder", "report_html", "lava_file"]
+    with open(csv_path, "w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        w.writerows(rows)
+
+    run_meta = {
+        "tool": tool,
+        "input_dir": str(input_dir),
+        "output_dir": str(output_dir),
+        "started": start_dt.isoformat() if start_dt else None,
+        "finished": end_dt.isoformat() if end_dt else None,
+        "elapsed_seconds": round(elapsed, 1) if elapsed is not None else None,
+        "counts": counts,
+        "hash_algorithm": "sha256",
+    }
+    json_path = output_dir / "manifest.json"
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump({"run": run_meta, "extractions": rows}, f, indent=2)
+    return csv_path, json_path
+
+
 class BatchError(Exception):
     """A user-facing problem (bad input dir, missing LEAPP tool, etc.)."""
 
 
 def run_batch(input_dir, output_dir, leapp, *, python=sys.executable,
-              type="zip", jobs=1, timeout=None, heartbeat=30,
+              type="auto", jobs=1, timeout=None, heartbeat=30,
               skip_existing=False, dry_run=False, capture=None,
-              log=print, should_stop=None):
+              hashes=True, extra_args=None, log=print, should_stop=None):
     """Core engine shared by the CLI and the GUI.
 
-    Runs the chosen LEAPP tool over every zip under input_dir and writes a
-    master index. `log(str)` receives every output line; `should_stop()` (if
-    given) is polled so callers can cancel. Returns a result dict with keys:
-    ok, failed, skipped, index, start, end, elapsed, total, tool.
+    Runs the chosen LEAPP tool over every archive under input_dir and writes a
+    master index plus a manifest (CSV+JSON). `log(str)` receives every output
+    line; `should_stop()` (if given) is polled so callers can cancel. Returns a
+    result dict with keys: ok, failed, invalid, skipped, index, manifest, start,
+    end, elapsed, total, tool.
 
-    Raises BatchError for bad inputs. `capture` defaults to (jobs > 1); pass
-    True to always capture tool output to per-job logs (e.g. from a GUI).
+    `type` "auto" picks -t per file from its extension (zip/tar/gz); any other
+    value forces that -t for every archive. `hashes` records SHA-256 of each
+    input. `extra_args` (list) is appended to every LEAPP command line.
+    Raises BatchError for bad inputs. `capture` defaults to (jobs > 1).
     """
     input_dir = Path(input_dir).expanduser().resolve()
     output_dir = Path(output_dir).expanduser().resolve()
@@ -539,6 +670,9 @@ def run_batch(input_dir, output_dir, leapp, *, python=sys.executable,
     workers = max(1, int(jobs))
     if capture is None:
         capture = workers > 1
+    force_type = None if (not type or str(type).lower() == "auto") else str(type)
+    extra = list(extra_args or [])
+    do_hash = bool(hashes) and not dry_run
 
     if not input_dir.is_dir():
         raise BatchError(f"Input is not a directory: {input_dir}")
@@ -550,12 +684,12 @@ def run_batch(input_dir, output_dir, leapp, *, python=sys.executable,
     if not dry_run and not leapp_target_ok(leapp):
         raise BatchError(f"LEAPP tool not found: {leapp}")
 
-    zips = find_zips(input_dir)
-    result = {"ok": [], "failed": [], "skipped": [], "index": None,
-              "start": None, "end": None, "elapsed": 0.0,
-              "total": len(zips), "tool": tool}
-    if not zips:
-        log(f"No .zip files found under {input_dir}")
+    archives = find_archives(input_dir)
+    result = {"ok": [], "failed": [], "invalid": [], "skipped": [],
+              "index": None, "manifest": None, "start": None, "end": None,
+              "elapsed": 0.0, "total": len(archives), "tool": tool}
+    if not archives:
+        log(f"No archives (.zip/.tar/.gz) found under {input_dir}")
         return result
 
     start_dt = datetime.now()
@@ -564,21 +698,33 @@ def run_batch(input_dir, output_dir, leapp, *, python=sys.executable,
 
     output_dir.mkdir(parents=True, exist_ok=True)
     log(f"Tool: {tool}  ({leapp})")
-    log(f"Found {len(zips)} zip file(s) under {input_dir}")
+    log(f"Found {len(archives)} archive(s) under {input_dir}")
     log(f"Reports will be written under {output_dir}")
+    if extra:
+        log(f"Extra LEAPP args: {' '.join(extra)}")
     log(f"Started:  {start_dt.strftime('%Y-%m-%d %H:%M:%S')}\n")
 
-    succeeded, failed, skipped = result["ok"], result["failed"], result["skipped"]
+    succeeded, failed = result["ok"], result["failed"]
+    invalid, skipped = result["invalid"], result["skipped"]
     entries = {}   # keyed by dest so parallel results land in the right row
     prefix = leapp_command_prefix(leapp, python)
     work = []
 
+    def stem_for(rel: Path, ext: str) -> str:
+        """Per-zip folder name from the rel path, stripping the full archive ext
+        (so 'a/b.tar.gz' -> 'a_b', not 'a_b.tar')."""
+        parts = list(rel.parts)
+        fname = parts[-1]
+        parts[-1] = fname[:-len(ext)] if fname.lower().endswith(ext) else Path(fname).stem
+        return "_".join(parts)
+
     # --- Phase 1: assign output dirs and decide what to run (sequential,
     # so unique_dir() can't race) ---
-    for zip_path in zips:
+    for zip_path, kind, ext in archives:
         rel = zip_path.relative_to(input_dir)
         root = rel.parts[0] if len(rel.parts) > 1 else input_dir.name
-        stem = "_".join(rel.with_suffix("").parts)
+        stem = stem_for(rel, ext)
+        t = force_type or kind
         dest = output_dir / stem
 
         if skip_existing and dest.exists() and any(dest.iterdir()):
@@ -586,20 +732,33 @@ def run_batch(input_dir, output_dir, leapp, *, python=sys.executable,
             skipped.append(zip_path)
             idx, lava = locate_report_files(dest)
             entries[dest] = {"root": root, "zip": rel.as_posix(), "dest": dest,
-                             "index": idx, "lava": lava, "status": "skipped"}
+                             "index": idx, "lava": lava, "status": "skipped",
+                             "type": t, "elapsed": None,
+                             "sha256": sha256_file(zip_path) if do_hash else None}
+            continue
+
+        if not dry_run and not is_valid_archive(zip_path, kind):
+            log(f"INVALID  {rel.as_posix()}  (not a valid {kind} archive — skipped)")
+            invalid.append((zip_path, "invalid archive"))
+            entries[output_dir / stem] = {
+                "root": root, "zip": rel.as_posix(), "dest": output_dir / stem,
+                "index": None, "lava": None, "status": "invalid", "type": t,
+                "elapsed": None,
+                "sha256": sha256_file(zip_path) if do_hash else None}
             continue
 
         dest = unique_dir(output_dir, stem)
         dest.mkdir(parents=True, exist_ok=True)
-        cmd = prefix + ["-t", type, "-i", str(zip_path), "-o", str(dest)]
+        cmd = prefix + ["-t", t, "-i", str(zip_path), "-o", str(dest)] + extra
 
         if dry_run:
             log(f"dry-run: {' '.join(cmd)}")
             entries[dest] = {"root": root, "zip": rel.as_posix(), "dest": dest,
-                             "index": None, "lava": None, "status": "dry-run"}
+                             "index": None, "lava": None, "status": "dry-run",
+                             "type": t, "elapsed": None, "sha256": None}
             continue
 
-        work.append({"zip": zip_path, "rel": rel, "root": root,
+        work.append({"zip": zip_path, "rel": rel, "root": root, "type": t,
                      "dest": dest, "cmd": cmd, "log_name": log_name})
 
     for i, job in enumerate(work, 1):
@@ -636,8 +795,10 @@ def run_batch(input_dir, output_dir, leapp, *, python=sys.executable,
             failed.append((job["zip"], f"exit {res['rc']}"))
             status = "failed"
         entries[job["dest"]] = {"root": job["root"], "zip": rel_str,
-                                "dest": job["dest"], "index": idx,
-                                "lava": lava, "status": status}
+                                "dest": job["dest"], "index": idx, "lava": lava,
+                                "status": status, "type": job.get("type"),
+                                "elapsed": res.get("elapsed"),
+                                "sha256": res.get("sha256")}
 
     active = {}                     # rel_str -> monotonic start time
     active_lock = threading.Lock()
@@ -651,10 +812,16 @@ def run_batch(input_dir, output_dir, leapp, *, python=sys.executable,
             active[rel_str] = time.monotonic()
         log(f"[{job['n']}/{total}] START    {rel_str}")
         try:
-            return run_job(job, timeout, capture, isolate=capture)
+            res = run_job(job, timeout, capture, isolate=capture)
         finally:
             with active_lock:
                 active.pop(rel_str, None)
+        if do_hash:
+            try:
+                res["sha256"] = sha256_file(job["zip"])
+            except OSError:
+                res["sha256"] = None
+        return res
 
     def heartbeat_loop():
         while not stop_beat.wait(heartbeat):
@@ -691,21 +858,30 @@ def run_batch(input_dir, output_dir, leapp, *, python=sys.executable,
     elapsed = time.monotonic() - start_perf
     result["end"], result["elapsed"] = end_dt, elapsed
 
-    # --- Phase 3: master index + summary ---
+    # --- Phase 3: master index + manifest + summary ---
     ordered = [entries[d] for d in sorted(entries, key=lambda d: d.as_posix())]
+    counts = {}
+    for e in ordered:
+        counts[e["status"]] = counts.get(e["status"], 0) + 1
     if ordered:
         result["index"] = write_index(output_dir, ordered, tool,
                                        lava_installed(), start_dt, end_dt, elapsed)
         log(f"\nWrote master index: {result['index']}")
+        csv_path, json_path = write_manifest(
+            output_dir, ordered, tool, input_dir, start_dt, end_dt, elapsed, counts)
+        result["manifest"] = csv_path
+        log(f"Wrote manifest:     {csv_path}")
 
+    inv = f", {len(invalid)} invalid" if invalid else ""
     log("=" * 60)
-    log(f"Done. {len(succeeded)} ok, {len(failed)} failed, {len(skipped)} skipped.")
+    log(f"Done. {len(succeeded)} ok, {len(failed)} failed{inv}, "
+        f"{len(skipped)} skipped.")
     log(f"Started:  {start_dt.strftime('%Y-%m-%d %H:%M:%S')}")
     log(f"Finished: {end_dt.strftime('%Y-%m-%d %H:%M:%S')}")
     log(f"Elapsed:  {fmt_duration(elapsed)}")
-    if failed:
-        log("\nFailures:")
-        for zip_path, why in failed:
+    if failed or invalid:
+        log("\nProblems:")
+        for zip_path, why in [*failed, *invalid]:
             log(f"  - {zip_path}  ({why})")
     return result
 
@@ -713,7 +889,9 @@ def run_batch(input_dir, output_dir, leapp, *, python=sys.executable,
 def build_arg_parser():
     parser = argparse.ArgumentParser(
         description="Recursively run a LEAPP tool (iLEAPP/ALEAPP/RLEAPP/VLEAPP) "
-                    "on every zip in a directory.",
+                    "on every archive in a directory.",
+        epilog="Anything after a literal '--' is passed verbatim to every LEAPP "
+               "run, e.g.:  batch_leapp.py in out --leapp ileapp.py -- -p fast",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("input_dir", type=Path, help="Directory to search recursively for .zip files")
@@ -725,8 +903,10 @@ def build_arg_parser():
     )
     parser.add_argument("--python", default=sys.executable,
                         help="Python interpreter used to run a .py LEAPP tool")
-    parser.add_argument("-t", "--type", default="zip",
-                        help="LEAPP extraction type passed with -t")
+    parser.add_argument("-t", "--type", default="auto",
+                        help="LEAPP extraction type for -t. 'auto' (default) "
+                             "picks zip/tar/gz per file; any other value forces "
+                             "that type for every archive")
     parser.add_argument("-j", "--jobs", type=int, default=1,
                         help="Number of LEAPP runs to execute in parallel")
     parser.add_argument("--heartbeat", type=int, default=30, metavar="SECONDS",
@@ -734,6 +914,8 @@ def build_arg_parser():
                              "every N seconds (0 to disable)")
     parser.add_argument("--timeout", type=int, default=None,
                         help="Per-zip timeout in seconds (default: no timeout)")
+    parser.add_argument("--no-hash", dest="hashes", action="store_false",
+                        help="Do not compute SHA-256 of each input archive")
     parser.add_argument("--skip-existing", action="store_true",
                         help="Skip a zip if its output dir already exists and is non-empty")
     parser.add_argument("--dry-run", action="store_true",
@@ -742,18 +924,25 @@ def build_arg_parser():
 
 
 def main():
-    args = build_arg_parser().parse_args()
+    # Everything after a literal '--' is passed straight to the LEAPP tool.
+    argv = sys.argv[1:]
+    extra = []
+    if "--" in argv:
+        i = argv.index("--")
+        argv, extra = argv[:i], argv[i + 1:]
+    args = build_arg_parser().parse_args(argv)
     try:
         result = run_batch(
             args.input_dir, args.output_dir, args.leapp,
             python=args.python, type=args.type, jobs=args.jobs,
             timeout=args.timeout, heartbeat=args.heartbeat,
             skip_existing=args.skip_existing, dry_run=args.dry_run,
+            hashes=args.hashes, extra_args=extra,
         )
     except BatchError as ex:
         print(f"Error: {ex}", file=sys.stderr)
         return 2
-    return 1 if result["failed"] else 0
+    return 1 if (result["failed"] or result["invalid"]) else 0
 
 
 if __name__ == "__main__":
