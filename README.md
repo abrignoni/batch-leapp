@@ -24,13 +24,27 @@ iLEAPP, ALEAPP, RLEAPP and VLEAPP all share the same command line — `python <x
 
 ## Requirements
 
-- Python 3.8+ (standard library only — nothing to `pip install` for this script).
-- A working LEAPP install. You point at its main script with `--leapp` (e.g. `ileapp.py`, `aleapp.py`, `rleapp.py`, `vleapp.py`).
-- If the LEAPP tool lives in its own virtual environment, point `--python` at that environment's interpreter.
+- Python 3.8+ (standard library only — nothing to `pip install`).
+- A working LEAPP tool. You point `--leapp` at **either**:
+  - a script — `ileapp.py`, `aleapp.py`, `rleapp.py`, `vleapp.py`, or
+  - a **compiled CLI binary** / macOS **`.app`** from a LEAPP release (`ileapp`, `iLEAPP.exe`, `iLEAPP.app`, …).
+  - (Use the command-line build, not the interactive GUI build — the GUI doesn't take batch arguments. batch-leapp warns if the name looks like a GUI.)
+- If a `.py` tool lives in its own virtual environment, point `--python` at that environment's interpreter (ignored for binaries).
+- The optional GUI uses **Tkinter** (bundled with most Python installs; on some Linux distros: `sudo apt install python3-tk`).
 
 ---
 
 ## Usage
+
+### GUI
+
+```bash
+python batch_leapp_gui.py
+```
+
+Pick the input dir, output dir, and LEAPP tool, set parallel jobs, and click **Run** — a live log streams in the window, with **Stop**, **Open report index**, and **Open output folder** buttons. It tries to auto-detect an installed LEAPP tool to prefill the field.
+
+### Command line
 
 ```bash
 python batch_leapp.py INPUT_DIR OUTPUT_DIR --leapp /path/to/<x>leapp.py
@@ -55,6 +69,13 @@ python batch_leapp.py /Volumes/Cases/android /Volumes/Cases/android_reports \
     --leapp ~/tools/ALEAPP/aleapp.py
 ```
 
+Compiled binary / macOS `.app` (no Python needed for the tool itself):
+
+```bash
+python batch_leapp.py /Volumes/Cases/ios /Volumes/Cases/ios_reports \
+    --leapp /Applications/iLEAPP.app
+```
+
 Open the result:
 
 ```bash
@@ -67,8 +88,8 @@ open /Volumes/Cases/ios_reports/index.html
 
 | Option | Default | Description |
 |---|---|---|
-| `--leapp PATH` | `ileapp.py` | Path to the LEAPP script (`ileapp.py` / `aleapp.py` / `rleapp.py` / `vleapp.py`). `--ileapp` is accepted as an alias. |
-| `--python PATH` | current interpreter | Python used to run the tool (point at the tool's venv if it has one). |
+| `--leapp PATH` | `ileapp.py` | Path to the LEAPP **script** (`ileapp.py` …) **or compiled binary / macOS `.app`**. `--ileapp` is accepted as an alias. |
+| `--python PATH` | current interpreter | Python used to run a `.py` tool (point at the tool's venv if it has one). Ignored for binaries. |
 | `-t`, `--type TYPE` | `zip` | Extraction type passed with `-t`. |
 | `-j`, `--jobs N` | `1` | Number of LEAPP runs to execute in parallel. |
 | `--heartbeat SECONDS` | `30` | In parallel mode, print a "still running" line every N seconds so long runs don't look hung (`0` disables). |

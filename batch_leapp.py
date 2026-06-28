@@ -58,14 +58,56 @@ LEAPP_NAMES = {
 
 
 def tool_name_from(leapp_path: Path) -> str:
-    """Derive a display name (e.g. 'ALEAPP') from the LEAPP script's filename."""
+    """Derive a display name (e.g. 'ALEAPP') from the LEAPP tool's filename.
+
+    Works for scripts (ileapp.py), binaries (ileapp, iLEAPP.exe) and macOS app
+    bundles (iLEAPP.app). Trailing 'gui'/'cli' markers are stripped first.
+    """
     stem = leapp_path.stem.lower()
+    for suffix in ("gui", "-cli", "_cli", "cli"):
+        if stem.endswith(suffix) and len(stem) > len(suffix):
+            stem = stem[:-len(suffix)]
+            break
     if stem in LEAPP_NAMES:
         return LEAPP_NAMES[stem]
-    # Generic *leapp.py fallback, else just the upper-cased stem.
+    # Generic *leapp fallback, else just the upper-cased stem.
     if stem.endswith("leapp") and len(stem) > len("leapp"):
         return stem[:-len("leapp")] + "LEAPP"
     return stem.upper()
+
+
+def leapp_target_ok(leapp: Path) -> bool:
+    """True if `leapp` is a usable target: a file (script/binary) or a .app dir."""
+    return leapp.is_file() or (leapp.suffix.lower() == ".app" and leapp.is_dir())
+
+
+def _macos_app_executable(app: Path) -> Path:
+    """Return the CLI executable inside a macOS .app bundle."""
+    import plistlib
+    macos = app / "Contents" / "MacOS"
+    name = None
+    try:
+        with open(app / "Contents" / "Info.plist", "rb") as f:
+            name = plistlib.load(f).get("CFBundleExecutable")
+    except (OSError, ValueError):
+        name = None
+    if name and (macos / name).exists():
+        return macos / name
+    if macos.is_dir():                       # fallback: first file in MacOS/
+        for p in sorted(macos.iterdir()):
+            if p.is_file():
+                return p
+    return macos / (name or app.stem)
+
+
+def leapp_command_prefix(leapp: Path, python: str) -> list:
+    """Command prefix to invoke a LEAPP tool — supports .py scripts as well as
+    packaged binaries and macOS .app bundles (all share the -t/-i/-o CLI)."""
+    if leapp.suffix.lower() == ".py":
+        return [python, str(leapp)]
+    if leapp.suffix.lower() == ".app" and leapp.is_dir():
+        return [str(_macos_app_executable(leapp))]
+    return [str(leapp)]                       # plain binary / executable
 
 
 def unique_dir(parent: Path, name: str) -> Path:
@@ -465,106 +507,74 @@ document.addEventListener('keydown',function(e){
     return index_path
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Recursively run a LEAPP tool (iLEAPP/ALEAPP/RLEAPP/VLEAPP) "
-                    "on every zip in a directory.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
-    parser.add_argument("input_dir", type=Path, help="Directory to search recursively for .zip files")
-    parser.add_argument("output_dir", type=Path, help="Directory to write the report folders into")
-    parser.add_argument(
-        "--leapp", "--ileapp",
-        dest="leapp",
-        type=Path,
-        default=Path("ileapp.py"),
-        help="Path to the LEAPP script, e.g. ileapp.py / aleapp.py / rleapp.py / vleapp.py",
-    )
-    parser.add_argument(
-        "--python",
-        default=sys.executable,
-        help="Python interpreter used to run the LEAPP tool",
-    )
-    parser.add_argument(
-        "-t", "--type",
-        default="zip",
-        help="iLEAPP extraction type passed with -t",
-    )
-    parser.add_argument(
-        "-j", "--jobs",
-        type=int,
-        default=1,
-        help="Number of iLEAPP runs to execute in parallel",
-    )
-    parser.add_argument(
-        "--heartbeat",
-        type=int,
-        default=30,
-        metavar="SECONDS",
-        help="In parallel mode, print a 'still running' line every N seconds "
-             "(0 to disable)",
-    )
-    parser.add_argument(
-        "--timeout",
-        type=int,
-        default=None,
-        help="Per-zip timeout in seconds (default: no timeout)",
-    )
-    parser.add_argument(
-        "--skip-existing",
-        action="store_true",
-        help="Skip a zip if its output directory already exists and is non-empty",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="List what would run without invoking the LEAPP tool",
-    )
-    args = parser.parse_args()
+class BatchError(Exception):
+    """A user-facing problem (bad input dir, missing LEAPP tool, etc.)."""
 
-    input_dir = args.input_dir.expanduser().resolve()
-    output_dir = args.output_dir.expanduser().resolve()
-    leapp = args.leapp.expanduser().resolve()
+
+def run_batch(input_dir, output_dir, leapp, *, python=sys.executable,
+              type="zip", jobs=1, timeout=None, heartbeat=30,
+              skip_existing=False, dry_run=False, capture=None,
+              log=print, should_stop=None):
+    """Core engine shared by the CLI and the GUI.
+
+    Runs the chosen LEAPP tool over every zip under input_dir and writes a
+    master index. `log(str)` receives every output line; `should_stop()` (if
+    given) is polled so callers can cancel. Returns a result dict with keys:
+    ok, failed, skipped, index, start, end, elapsed, total, tool.
+
+    Raises BatchError for bad inputs. `capture` defaults to (jobs > 1); pass
+    True to always capture tool output to per-job logs (e.g. from a GUI).
+    """
+    input_dir = Path(input_dir).expanduser().resolve()
+    output_dir = Path(output_dir).expanduser().resolve()
+    leapp = Path(leapp).expanduser().resolve()
     tool = tool_name_from(leapp)
     log_name = f"{tool.lower()}_run.log"
+    workers = max(1, int(jobs))
+    if capture is None:
+        capture = workers > 1
 
     if not input_dir.is_dir():
-        parser.error(f"input_dir is not a directory: {input_dir}")
-    if not args.dry_run and not leapp.is_file():
-        parser.error(f"LEAPP script not found: {leapp}  (use --leapp to point at it)")
+        raise BatchError(f"Input is not a directory: {input_dir}")
+    if not dry_run and not leapp_target_ok(leapp):
+        raise BatchError(f"LEAPP tool not found: {leapp}")
+    if "gui" in leapp.stem.lower():
+        log(f"Warning: '{leapp.name}' looks like the interactive GUI build. "
+            f"Use the command-line LEAPP binary/script for batch processing.")
 
     zips = find_zips(input_dir)
+    result = {"ok": [], "failed": [], "skipped": [], "index": None,
+              "start": None, "end": None, "elapsed": 0.0,
+              "total": len(zips), "tool": tool}
     if not zips:
-        print(f"No .zip files found under {input_dir}")
-        return 0
+        log(f"No .zip files found under {input_dir}")
+        return result
 
     start_dt = datetime.now()
     start_perf = time.monotonic()
+    result["start"] = start_dt
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Tool: {tool}  ({leapp})")
-    print(f"Found {len(zips)} zip file(s) under {input_dir}")
-    print(f"Reports will be written under {output_dir}")
-    print(f"Started:  {start_dt.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    log(f"Tool: {tool}  ({leapp})")
+    log(f"Found {len(zips)} zip file(s) under {input_dir}")
+    log(f"Reports will be written under {output_dir}")
+    log(f"Started:  {start_dt.strftime('%Y-%m-%d %H:%M:%S')}\n")
 
-    succeeded, failed, skipped = [], [], []
+    succeeded, failed, skipped = result["ok"], result["failed"], result["skipped"]
     entries = {}   # keyed by dest so parallel results land in the right row
-    jobs = []
+    prefix = leapp_command_prefix(leapp, python)
+    work = []
 
     # --- Phase 1: assign output dirs and decide what to run (sequential,
     # so unique_dir() can't race) ---
     for zip_path in zips:
-        # Name the per-zip output dir after the zip's path relative to input_dir
-        # so two same-named zips in different folders don't collide.
         rel = zip_path.relative_to(input_dir)
-        # "Source dir" = the top-level directory the zip lives under; if the zip
-        # sits directly in input_dir, fall back to input_dir's own name.
         root = rel.parts[0] if len(rel.parts) > 1 else input_dir.name
         stem = "_".join(rel.with_suffix("").parts)
         dest = output_dir / stem
 
-        if args.skip_existing and dest.exists() and any(dest.iterdir()):
-            print(f"skip (exists): {rel.as_posix()}")
+        if skip_existing and dest.exists() and any(dest.iterdir()):
+            log(f"skip (exists): {rel.as_posix()}")
             skipped.append(zip_path)
             idx, lava = locate_report_files(dest)
             entries[dest] = {"root": root, "zip": rel.as_posix(), "dest": dest,
@@ -573,127 +583,169 @@ def main():
 
         dest = unique_dir(output_dir, stem)
         dest.mkdir(parents=True, exist_ok=True)
-        cmd = [args.python, str(leapp), "-t", args.type,
-               "-i", str(zip_path), "-o", str(dest)]
+        cmd = prefix + ["-t", type, "-i", str(zip_path), "-o", str(dest)]
 
-        if args.dry_run:
-            print(f"dry-run: {' '.join(cmd)}")
+        if dry_run:
+            log(f"dry-run: {' '.join(cmd)}")
             entries[dest] = {"root": root, "zip": rel.as_posix(), "dest": dest,
                              "index": None, "lava": None, "status": "dry-run"}
             continue
 
-        jobs.append({"zip": zip_path, "rel": rel, "root": root,
+        work.append({"zip": zip_path, "rel": rel, "root": root,
                      "dest": dest, "cmd": cmd, "log_name": log_name})
 
-    # --- Phase 2: execute (parallel when --jobs > 1) ---
-    workers = max(1, args.jobs)
-    capture = workers > 1
-    if jobs:
-        print(f"\nRunning {len(jobs)} job(s) with {workers} worker(s)...\n")
+    for i, job in enumerate(work, 1):
+        job["n"] = i
 
-    total = len(jobs)
-    done = 0   # incremented by record(); called only on the main thread
+    # --- Phase 2: execute ---
+    total = len(work)
+    done = 0
+    if work:
+        log(f"\nRunning {total} job(s) with {workers} worker(s)...\n")
 
     def record(res):
         nonlocal done
         done += 1
-        counter = f"[{done}/{total}]"
         job = res["job"]
         idx, lava = locate_report_files(job["dest"])
         rel_str = job["rel"].as_posix()
-        if res["error"] == "timeout":
-            print(f"{counter} TIMEOUT  {rel_str}  (after {args.timeout}s)")
+        counter = f"[{done}/{total}]"
+        if res["error"] == "cancelled":
+            log(f"{counter} CANCELLED {rel_str}")
+            skipped.append(job["zip"])
+            status = "skipped"
+        elif res["error"] == "timeout":
+            log(f"{counter} TIMEOUT  {rel_str}  (after {timeout}s)")
             failed.append((job["zip"], "timeout"))
             status = "failed"
         elif res["rc"] == 0:
-            print(f"{counter} OK       {rel_str}  ({res['elapsed']:.0f}s)")
+            log(f"{counter} OK       {rel_str}  ({res['elapsed']:.0f}s)")
             succeeded.append(job["zip"])
             status = "ok"
         else:
-            log_hint = f", see {log_name}" if capture else ""
-            print(f"{counter} FAILED   {rel_str}  (exit {res['rc']}{log_hint})")
+            hint = f", see {log_name}" if capture else ""
+            log(f"{counter} FAILED   {rel_str}  (exit {res['rc']}{hint})")
             failed.append((job["zip"], f"exit {res['rc']}"))
             status = "failed"
         entries[job["dest"]] = {"root": job["root"], "zip": rel_str,
                                 "dest": job["dest"], "index": idx,
                                 "lava": lava, "status": status}
 
-    # Track which jobs are currently in flight so the heartbeat can report
-    # them. Touched from worker + heartbeat threads, so guard with a lock.
     active = {}                     # rel_str -> monotonic start time
     active_lock = threading.Lock()
     stop_beat = threading.Event()
 
     def run_and_track(job):
+        if should_stop and should_stop():
+            return {"job": job, "rc": None, "elapsed": 0, "error": "cancelled"}
         rel_str = job["rel"].as_posix()
         with active_lock:
             active[rel_str] = time.monotonic()
-        print(f"  START    {rel_str}")
+        log(f"[{job['n']}/{total}] START    {rel_str}")
         try:
-            return run_job(job, args.timeout, capture, isolate=True)
+            return run_job(job, timeout, capture, isolate=capture)
         finally:
             with active_lock:
                 active.pop(rel_str, None)
 
-    def heartbeat():
-        # stop_beat.wait() returns True the moment we're told to stop, so the
-        # thread exits promptly instead of sleeping out a full interval.
-        while not stop_beat.wait(args.heartbeat):
+    def heartbeat_loop():
+        while not stop_beat.wait(heartbeat):
             now = time.monotonic()
             with active_lock:
                 snap = sorted(active.items(), key=lambda kv: kv[1])
             if not snap:
                 continue
-            shown = ", ".join(f"{name} ({now - t:.0f}s)" for name, t in snap[:4])
+            shown = ", ".join(f"{n} ({now - t:.0f}s)" for n, t in snap[:4])
             more = f" +{len(snap) - 4} more" if len(snap) > 4 else ""
-            print(f"  ...      {len(snap)} running [{done}/{total} done]: {shown}{more}")
+            log(f"  ...      {len(snap)} running [{done}/{total} done]: {shown}{more}")
 
+    beat = None
     try:
+        if work and capture and heartbeat > 0:
+            beat = threading.Thread(target=heartbeat_loop, daemon=True)
+            beat.start()
         if workers == 1:
-            for job in jobs:
-                print(f"[{done + 1}/{total}] running: {job['rel'].as_posix()}")
-                record(run_job(job, args.timeout, capture=False))
+            for job in work:
+                record(run_and_track(job))
         else:
-            beat = None
-            if args.heartbeat > 0:
-                beat = threading.Thread(target=heartbeat, daemon=True)
-                beat.start()
-            try:
-                with ThreadPoolExecutor(max_workers=workers) as pool:
-                    futures = {pool.submit(run_and_track, job): job
-                               for job in jobs}
-                    for fut in as_completed(futures):
-                        record(fut.result())
-            finally:
-                stop_beat.set()
-                if beat:
-                    beat.join(timeout=1)
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {pool.submit(run_and_track, job): job for job in work}
+                for fut in as_completed(futures):
+                    record(fut.result())
     except KeyboardInterrupt:
+        log("\nInterrupted by user — writing index for completed runs.")
+    finally:
         stop_beat.set()
-        print("\nInterrupted by user — writing index for completed runs.")
+        if beat:
+            beat.join(timeout=1)
 
     end_dt = datetime.now()
     elapsed = time.monotonic() - start_perf
+    result["end"], result["elapsed"] = end_dt, elapsed
 
-    # --- Phase 3: master index + summary (entries ordered to match zip order) ---
-    ordered = [entries[d] for d in
-               sorted(entries, key=lambda d: d.as_posix())]
+    # --- Phase 3: master index + summary ---
+    ordered = [entries[d] for d in sorted(entries, key=lambda d: d.as_posix())]
     if ordered:
-        index_path = write_index(output_dir, ordered, tool, lava_installed(),
-                                 start_dt, end_dt, elapsed)
-        print(f"\nWrote master index: {index_path}")
+        result["index"] = write_index(output_dir, ordered, tool,
+                                       lava_installed(), start_dt, end_dt, elapsed)
+        log(f"\nWrote master index: {result['index']}")
 
-    print("=" * 60)
-    print(f"Done. {len(succeeded)} ok, {len(failed)} failed, {len(skipped)} skipped.")
-    print(f"Started:  {start_dt.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Finished: {end_dt.strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Elapsed:  {fmt_duration(elapsed)}")
+    log("=" * 60)
+    log(f"Done. {len(succeeded)} ok, {len(failed)} failed, {len(skipped)} skipped.")
+    log(f"Started:  {start_dt.strftime('%Y-%m-%d %H:%M:%S')}")
+    log(f"Finished: {end_dt.strftime('%Y-%m-%d %H:%M:%S')}")
+    log(f"Elapsed:  {fmt_duration(elapsed)}")
     if failed:
-        print("\nFailures:")
+        log("\nFailures:")
         for zip_path, why in failed:
-            print(f"  - {zip_path}  ({why})")
+            log(f"  - {zip_path}  ({why})")
+    return result
 
-    return 1 if failed else 0
+
+def build_arg_parser():
+    parser = argparse.ArgumentParser(
+        description="Recursively run a LEAPP tool (iLEAPP/ALEAPP/RLEAPP/VLEAPP) "
+                    "on every zip in a directory.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("input_dir", type=Path, help="Directory to search recursively for .zip files")
+    parser.add_argument("output_dir", type=Path, help="Directory to write the report folders into")
+    parser.add_argument(
+        "--leapp", "--ileapp", dest="leapp", type=Path, default=Path("ileapp.py"),
+        help="Path to the LEAPP script OR compiled binary / macOS .app "
+             "(ileapp.py, ileapp, iLEAPP.exe, iLEAPP.app, ...)",
+    )
+    parser.add_argument("--python", default=sys.executable,
+                        help="Python interpreter used to run a .py LEAPP tool")
+    parser.add_argument("-t", "--type", default="zip",
+                        help="LEAPP extraction type passed with -t")
+    parser.add_argument("-j", "--jobs", type=int, default=1,
+                        help="Number of LEAPP runs to execute in parallel")
+    parser.add_argument("--heartbeat", type=int, default=30, metavar="SECONDS",
+                        help="In parallel mode, print a 'still running' line "
+                             "every N seconds (0 to disable)")
+    parser.add_argument("--timeout", type=int, default=None,
+                        help="Per-zip timeout in seconds (default: no timeout)")
+    parser.add_argument("--skip-existing", action="store_true",
+                        help="Skip a zip if its output dir already exists and is non-empty")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="List what would run without invoking the LEAPP tool")
+    return parser
+
+
+def main():
+    args = build_arg_parser().parse_args()
+    try:
+        result = run_batch(
+            args.input_dir, args.output_dir, args.leapp,
+            python=args.python, type=args.type, jobs=args.jobs,
+            timeout=args.timeout, heartbeat=args.heartbeat,
+            skip_existing=args.skip_existing, dry_run=args.dry_run,
+        )
+    except BatchError as ex:
+        print(f"Error: {ex}", file=sys.stderr)
+        return 2
+    return 1 if result["failed"] else 0
 
 
 if __name__ == "__main__":
