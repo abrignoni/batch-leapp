@@ -64,6 +64,8 @@ python batch_leapp_gui.py
 
 Pick the input dir, output dir, and LEAPP tool, set parallel jobs, and click **Run** — a live log streams in the window, with **Stop**, **Open report index**, and **Open output folder** buttons. It tries to auto-detect an installed LEAPP tool to prefill the field.
 
+**Remembers your paths.** Each field has a **Recent ▾** button listing the input dirs, output dirs, and LEAPP tools you have used before, and the GUI prefills all three with your last-used values on launch. History is saved per-user (macOS `~/Library/Application Support/BatchLEAPP/`, Windows `%APPDATA%\BatchLEAPP\`, Linux `~/.config/BatchLEAPP/`); each menu has a **Clear recent** entry.
+
 Prefer a double-clickable app with no terminal? See **[Building standalone binaries](#building-standalone-binaries)** below.
 
 ### Command line

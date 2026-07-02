@@ -9,6 +9,7 @@ log. Shares the exact engine the CLI uses (batch_leapp.run_batch).
     python batch_leapp_gui.py
 """
 
+import json
 import os
 import queue
 import shlex
@@ -22,6 +23,64 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 
 import batch_leapp as core
+
+
+def _config_dir() -> Path:
+    """Per-OS folder for batch-leapp's own GUI settings (recent paths)."""
+    home = Path.home()
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA") or (home / "AppData" / "Roaming")
+        return Path(base) / "BatchLEAPP"
+    if sys.platform == "darwin":
+        return home / "Library" / "Application Support" / "BatchLEAPP"
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    return (Path(xdg) if xdg else home / ".config") / "BatchLEAPP"
+
+
+class History:
+    """Remembers recently used input dirs, output dirs, and LEAPP tools so the
+    GUI can prefill and offer them again. Stored as JSON in the config dir."""
+    LIMIT = 10
+    KEYS = ("input_dirs", "output_dirs", "leapp_tools")
+
+    def __init__(self):
+        self.path = _config_dir() / "history.json"
+        self.data = {k: [] for k in self.KEYS}
+        try:
+            loaded = json.loads(self.path.read_text(encoding="utf-8"))
+            for k in self.KEYS:
+                if isinstance(loaded.get(k), list):
+                    self.data[k] = [str(p) for p in loaded[k]]
+        except (OSError, ValueError):
+            pass
+
+    def recent(self, key):
+        return self.data.get(key, [])
+
+    def most_recent(self, key):
+        vals = self.data.get(key, [])
+        return vals[0] if vals else ""
+
+    def add(self, key, value):
+        if not value:
+            return
+        vals = [p for p in self.data.get(key, []) if p != value]
+        vals.insert(0, value)
+        self.data[key] = vals[:self.LIMIT]
+        self._save()
+
+    def clear(self, key):
+        self.data[key] = []
+        self._save()
+
+    def _save(self):
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self.data, indent=2), encoding="utf-8")
+            os.replace(tmp, self.path)
+        except OSError:
+            pass
 
 
 DONE = "__DONE__"      # sentinel pushed on the queue when a run finishes
@@ -80,10 +139,13 @@ class BatchLeappGUI:
         self.worker = None
         self.last_index = None
         self.last_output = None
+        self.history = History()
 
-        self.input_dir = tk.StringVar()
-        self.output_dir = tk.StringVar()
-        self.leapp = tk.StringVar(value=detect_leapp())
+        # Prefill from history (last used), falling back to auto-detection.
+        self.input_dir = tk.StringVar(value=self.history.most_recent("input_dirs"))
+        self.output_dir = tk.StringVar(value=self.history.most_recent("output_dirs"))
+        self.leapp = tk.StringVar(
+            value=self.history.most_recent("leapp_tools") or detect_leapp())
         self.ftype = tk.StringVar(value="auto")
         self.jobs = tk.IntVar(value=1)
         self.skip_existing = tk.BooleanVar(value=False)
@@ -169,9 +231,12 @@ class BatchLeappGUI:
         ttk.Label(titles, text="Run iLEAPP / ALEAPP / RLEAPP / VLEAPP across a "
                               "folder of zips", style="Status.TLabel").pack(anchor="w")
 
-        self._path_row(frm, 1, "Input dir (zips)", self.input_dir, self._pick_indir)
-        self._path_row(frm, 2, "Output dir", self.output_dir, self._pick_outdir)
-        self._path_row(frm, 3, "LEAPP tool", self.leapp, self._pick_leapp)
+        self._path_row(frm, 1, "Input dir (zips)", self.input_dir,
+                       self._pick_indir, "input_dirs")
+        self._path_row(frm, 2, "Output dir", self.output_dir,
+                       self._pick_outdir, "output_dirs")
+        self._path_row(frm, 3, "LEAPP tool", self.leapp,
+                       self._pick_leapp, "leapp_tools")
 
         opts = ttk.Frame(frm)
         opts.grid(row=4, column=0, columnspan=3, sticky="we", **pad)
@@ -222,10 +287,31 @@ class BatchLeappGUI:
         self.log.tag_configure("accent", foreground=GOLD)
         self.log.configure(state="disabled")
 
-    def _path_row(self, frm, row, label, var, cmd):
+    def _path_row(self, frm, row, label, var, cmd, hist_key):
         ttk.Label(frm, text=label).grid(row=row, column=0, sticky="w", padx=8, pady=4)
         ttk.Entry(frm, textvariable=var).grid(row=row, column=1, sticky="we", pady=4)
-        ttk.Button(frm, text="Browse…", command=cmd).grid(row=row, column=2, padx=8)
+        box = ttk.Frame(frm)
+        box.grid(row=row, column=2, padx=8, sticky="e")
+        ttk.Button(box, text="Browse…", command=cmd).pack(side="left")
+        rb = ttk.Button(box, text="Recent ▾", width=9)
+        rb.configure(command=lambda b=rb: self._show_recent(b, var, hist_key))
+        rb.pack(side="left", padx=(4, 0))
+
+    def _show_recent(self, button, var, key):
+        menu = tk.Menu(self.root, tearoff=0, bg=SURFACE2, fg=TEXT,
+                       activebackground=GOLD, activeforeground=OFF_BLACK,
+                       bd=0, relief="flat")
+        paths = self.history.recent(key)
+        if not paths:
+            menu.add_command(label="(no recent items)", state="disabled")
+        else:
+            for p in paths:
+                menu.add_command(label=p, command=lambda v=p: var.set(v))
+            menu.add_separator()
+            menu.add_command(label="Clear recent",
+                             command=lambda: self.history.clear(key))
+        menu.post(button.winfo_rootx(),
+                  button.winfo_rooty() + button.winfo_height())
 
     # ---- pickers ---------------------------------------------------------
     def _pick_indir(self):
@@ -284,6 +370,11 @@ class BatchLeappGUI:
                 f"can't be used for batch processing.\n\nChoose the command-line "
                 f"LEAPP tool instead.")
             return
+
+        # Remember the paths that were actually used, most-recent first.
+        self.history.add("input_dirs", self.input_dir.get())
+        self.history.add("output_dirs", self.output_dir.get())
+        self.history.add("leapp_tools", self.leapp.get())
 
         self._clear_log()
         self.stop_event.clear()
