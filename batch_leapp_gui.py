@@ -519,11 +519,17 @@ class BatchLeappGUI:
     @staticmethod
     def _line_tag(text):
         up = text.upper()
+        s = text.strip()
+        # Summary/separator lines mention "failed" even on a clean run — keep
+        # them neutral so a successful batch doesn't look like a failure.
+        if s.startswith("Done.") or s.startswith("===") or s.startswith("Finished:") \
+                or s.startswith("Started:") or s.startswith("Elapsed:"):
+            return "muted"
         if any(k in up for k in ("FAIL", "ERROR", "TIMEOUT")):
             return "fail"
         if " OK " in up or up.strip().startswith("OK"):
             return "ok"
-        if (text.startswith("===") or "START" in up or "HEARTBEAT" in up
+        if ("START" in up or "HEARTBEAT" in up
                 or "still running" in text or "STILL RUNNING" in up):
             return "muted"
         return ""
