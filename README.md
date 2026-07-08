@@ -125,9 +125,52 @@ open /Volumes/Cases/ios_reports/index.html
 | `--no-hash` | off | Skip computing the SHA-256 of each input archive (hashing is on by default). |
 | `--skip-existing` | off | Skip a zip whose output folder already exists and is non-empty (resume a partial run). |
 | `--dry-run` | off | Print the exact commands without running the tool. |
+| `--coverage` | off | **Developer mode.** Enable the LEAPP App Inventory artifacts on each run and aggregate every report into `batch_apps.sqlite` (see [Coverage mode](#coverage-mode-developers)). |
 | `-- <args>` | — | Everything after a literal `--` is appended verbatim to every LEAPP run (e.g. `-- -p fast` for an iLEAPP profile). |
 
 > **Passing extra args:** batch-leapp owns `-o` (it gives each extraction its own output folder), so don't pass your own `-o` through `--` — it would send every report to the same place. To rename the report folder use iLEAPP's `--custom_output_folder` instead (e.g. `-- --custom_output_folder MyReports`); it renames the folder *inside* each per-zip output dir, so there's no collision and the index/manifest still find every report.
+
+---
+
+## Coverage mode (developers)
+
+`--coverage` answers the question *“which installed apps are we not parsing?”*
+across a whole batch of test images. It is meant for LEAPP developers, not for
+casework.
+
+```bash
+python3 batch_leapp.py ~/test_images ~/reports --leapp ~/iLEAPP/ileapp.py --coverage
+```
+
+What it does:
+
+1. **Enables the App Inventory artifacts** (`scripts/alternate_artifacts/appInventory.py`
+   in the iLEAPP/ALEAPP source checkouts) for every run. For iLEAPP this uses
+   `--custom_artifacts_path`; ALEAPP has no such option yet, so the module is
+   staged into `scripts/artifacts/` for the duration of the batch and removed
+   afterwards. Normal (non-coverage) runs never see these artifacts.
+2. **Aggregates every report** into `batch_apps.sqlite` at the output root:
+   per-extraction device identifiers (`extractions`), installed apps
+   (`installed_apps`), every file mapped to its owning app (`app_files`), and
+   which files each LEAPP module matched (`artifact_files`).
+3. **Computes coverage views**:
+   - `v_apps_not_parsed` — apps with data on disk that no app-specific module
+     touched, per extraction
+   - `v_apps_not_parsed_rollup` — the same across all extractions, ranked
+   - `v_unknown_containers` — iOS app containers whose owner app is unknown
+   - `v_module_app_spread` — classifies modules as *generic* when they match
+     files for 10+ different apps (e.g. `userDefaults`); generic matches don't
+     make an app count as parsed
+
+Re-aggregate an existing batch output (no re-run needed) with:
+
+```bash
+python3 batch_coverage.py ~/reports
+```
+
+Notes: requires LEAPP **source checkouts** that contain the App Inventory
+module (compiled binaries don't bundle it); RLEAPP/VLEAPP batches aggregate
+run metadata but have no app inventory by design.
 
 ---
 
