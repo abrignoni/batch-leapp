@@ -402,14 +402,16 @@ TOOL_ACCENT = {
 
 def write_index(output_dir: Path, entries: list, tool: str = "LEAPP",
                 lava_available: bool = True, start_dt=None, end_dt=None,
-                elapsed=None) -> Path:
+                elapsed=None, coverage_lava: Path = None) -> Path:
     """Write a master index.html (styled to match leapps.org) linking every
     extraction's report folder, its index.html and its .lava file. Returns the
     path written.
 
     The LAVA column mirrors the LEAPP GUIs: when LAVA is installed the button
     opens the .lava project (via the OS file association); otherwise it links to
-    the LAVA download page.
+    the LAVA download page. When `coverage_lava` is given (the batch_apps.lava
+    project written by --coverage), a prominent button in the header opens the
+    whole-batch coverage analysis the same way.
     """
     end_dt = end_dt or datetime.now()
     title = f"{tool} batch report index"
@@ -479,6 +481,16 @@ def write_index(output_dir: Path, entries: list, tool: str = "LEAPP",
     summary = "".join(
         f'<span class="badge {k}">{counts[k]} {k}</span>'
         for k in order if counts.get(k))
+
+    coverage_btn = ""
+    if coverage_lava is not None and Path(coverage_lava).is_file():
+        rel = href(Path(coverage_lava), output_dir)
+        cls = ("btn lava lava-open coverage" if lava_available
+               else "btn getlava lava-open coverage")
+        cov_title = ("Open the app parsing-coverage analysis in LAVA"
+                     if lava_available else "LAVA not installed — how to get it")
+        coverage_btn = (f'<a class="{cls}" href="{rel}" data-rel="{rel}" '
+                        f'title="{cov_title}">App Coverage Analysis (LAVA)</a>')
 
     # Modal CSS / markup / script kept as plain strings (single braces) and
     # injected as f-string *values*, so their braces aren't parsed as fields.
@@ -627,6 +639,7 @@ document.addEventListener('keydown',function(e){
   a.btn.lava {{ color:var(--lava); }}
   a.btn.getlava {{ color:var(--off-black); background:var(--lava); border-color:var(--lava); }}
   a.btn.getlava:hover {{ color:var(--off-black); background:#fff; border-color:#fff; }}
+  a.btn.coverage {{ padding:.5rem 1.1rem; font-size:.95rem; border-color:var(--lava); }}
   .missing {{ color:var(--muted); }}
   .badge {{ display:inline-block; padding:.15rem .6rem; border-radius:999px; font-size:.72rem;
            font-weight:600; letter-spacing:.05em; text-transform:uppercase;
@@ -650,7 +663,7 @@ document.addEventListener('keydown',function(e){
 <h1><span class="tool">{html.escape(tool)}</span> batch report index</h1>
 <div class="meta">{meta_line}</div>
 </div>
-<div class="summary">{summary}</div>
+<div class="summary">{coverage_btn}{summary}</div>
 </header>
 <div class="table-wrap">
 <table>
@@ -962,18 +975,23 @@ def run_batch(input_dir, output_dir, leapp, *, python=None,
     counts = {}
     for e in ordered:
         counts[e["status"]] = counts.get(e["status"], 0) + 1
+    coverage_lava = None
+    if coverage and not dry_run:
+        log("")
+        result["coverage_db"] = batch_coverage.aggregate(output_dir, log=log)
+        if result["coverage_db"]:
+            sidecar = output_dir / batch_coverage.LAVA_SIDECAR_NAME
+            coverage_lava = sidecar if sidecar.is_file() else None
+
     if ordered:
         result["index"] = write_index(output_dir, ordered, tool,
-                                       lava_installed(), start_dt, end_dt, elapsed)
+                                       lava_installed(), start_dt, end_dt,
+                                       elapsed, coverage_lava=coverage_lava)
         log(f"\nWrote master index: {result['index']}")
         csv_path, json_path = write_manifest(
             output_dir, ordered, tool, input_dir, start_dt, end_dt, elapsed, counts)
         result["manifest"] = csv_path
         log(f"Wrote manifest:     {csv_path}")
-
-    if coverage and not dry_run:
-        log("")
-        result["coverage_db"] = batch_coverage.aggregate(output_dir, log=log)
 
     inv = f", {len(invalid)} invalid" if invalid else ""
     log("=" * 60)
