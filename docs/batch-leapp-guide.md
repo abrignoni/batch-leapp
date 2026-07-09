@@ -15,7 +15,7 @@ When a new LEAPP release comes out I like to run it against my collection of tes
 
 It is smart enough to skip things that aren't extractions (a lone gzipped log file is not a filesystem image) and it never descends into its own output folders.
 
-🔗 Get it here: https://github.com/abrignoni/batch-leapp
+🔗 Get it here: https://www.leapps.org/releases#section-batch-leapp
 
 ## The original use: release regression testing
 
