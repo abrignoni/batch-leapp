@@ -45,6 +45,6 @@ One last note: the `Modified Time` column in `app_files` is stored as text on pu
 
 Free tools, real validation, and now a data-driven list of what to build next. That's open source moving the field forward.
 
-Questions? I am reachable on X @AlexisBrignoni and email 4n6[at]abrignoni[dot]com.
+Questions? Find me on LinkedIn at https://www.linkedin.com/in/abrignoni/ or email abrignoni[at]duck[dot]com.
 
 #DFIR #FLOSS #MobileForensics #DigitalForensics

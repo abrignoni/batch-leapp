@@ -71,6 +71,6 @@ A few practical notes:
 
 What do you do with `batch_apps.sqlite` once you have it? That's the second guide.
 
-Questions? I am reachable on X @AlexisBrignoni and email 4n6[at]abrignoni[dot]com.
+Questions? Find me on LinkedIn at https://www.linkedin.com/in/abrignoni/ or email abrignoni[at]duck[dot]com.
 
 #DFIR #FLOSS #MobileForensics #DigitalForensics
