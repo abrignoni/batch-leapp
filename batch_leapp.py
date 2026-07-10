@@ -975,6 +975,15 @@ def run_batch(input_dir, output_dir, leapp, *, python=None,
     counts = {}
     for e in ordered:
         counts[e["status"]] = counts.get(e["status"], 0) + 1
+    # The manifest must be written BEFORE the coverage aggregate runs: the
+    # aggregate reads manifest.json to attach each extraction's input archive
+    # path and SHA-256 (previously it ran first and recorded them empty).
+    if ordered:
+        csv_path, json_path = write_manifest(
+            output_dir, ordered, tool, input_dir, start_dt, end_dt, elapsed, counts)
+        result["manifest"] = csv_path
+        log(f"\nWrote manifest:     {csv_path}")
+
     coverage_lava = None
     if coverage and not dry_run:
         log("")
@@ -987,11 +996,7 @@ def run_batch(input_dir, output_dir, leapp, *, python=None,
         result["index"] = write_index(output_dir, ordered, tool,
                                        lava_installed(), start_dt, end_dt,
                                        elapsed, coverage_lava=coverage_lava)
-        log(f"\nWrote master index: {result['index']}")
-        csv_path, json_path = write_manifest(
-            output_dir, ordered, tool, input_dir, start_dt, end_dt, elapsed, counts)
-        result["manifest"] = csv_path
-        log(f"Wrote manifest:     {csv_path}")
+        log(f"Wrote master index: {result['index']}")
 
     inv = f", {len(invalid)} invalid" if invalid else ""
     log("=" * 60)
