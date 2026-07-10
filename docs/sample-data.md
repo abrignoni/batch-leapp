@@ -18,6 +18,11 @@ ALEAPP from the coverage databases a `--coverage` batch produces. Each entry
 records the device OS version, the owning app's version (when the artifact is
 app-linked), and the row count the artifact produced on that image.
 
+> **New to this?** Follow the hands-on developer walkthrough:
+> [sample-data-walkthrough.md](sample-data-walkthrough.md) — step by step
+> from a folder of zips to the metadata PR, with troubleshooting. This page
+> is the reference.
+
 ## How the pipeline fits together
 
 ```
