@@ -23,6 +23,7 @@ Point it at a directory of extractions, walk away, and come back to a review-rea
 - [Batch LEAPP: process all your test images at once](docs/batch-leapp-guide.md) — what it is, release regression testing, and the `--coverage` mode.
 - [Reading the coverage database in LAVA](docs/coverage-analysis-lava.md) — what the reports mean and the analyses to run with them.
 - [Populating artifact `sample_data` from a test-image corpus](docs/sample-data.md) — auto-record per-image OS/app versions and row counts in the iLEAPP/ALEAPP artifact metadata.
+- [Step-by-step: populating `sample_data` from your own test images](docs/sample-data-walkthrough.md) — the hands-on developer walkthrough, from a folder of zips to the metadata PR, with troubleshooting.
 
 ## Download
 
