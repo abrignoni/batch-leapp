@@ -109,13 +109,16 @@ GUI_LOGO_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAG4AAABuCAMAA
 def detect_leapp():
     """Best-effort guess at an installed LEAPP tool to prefill the field."""
     import shutil
-    for name in ("ileapp", "aleapp", "rleapp", "vleapp"):
+    for name in core.LEAPP_NAMES:
         found = shutil.which(name)
         if found:
             return found
     if sys.platform == "darwin":
+        # Only the tools batch_leapp drives: '*LEAPP*.app' also matches this app
+        # itself and others that take no -t/-i/-o arguments.
         for app in sorted(Path("/Applications").glob("*[lL][eE][aA][pP][pP]*.app")):
-            if "gui" not in app.stem.lower():
+            if (app.stem.lower() in core.LEAPP_NAMES
+                    and not core.is_gui_build(app)):
                 return str(app)
     return ""
 
@@ -243,7 +246,7 @@ class BatchLeappGUI:
         titles = ttk.Frame(header)
         titles.pack(side="left", anchor="center")
         ttk.Label(titles, text="Batch LEAPP", style="Header.TLabel").pack(anchor="w")
-        ttk.Label(titles, text="Run iLEAPP / ALEAPP / RLEAPP / VLEAPP across a "
+        ttk.Label(titles, text="Run iLEAPP / ALEAPP / RLEAPP / VLEAPP / DLEAPP across a "
                               "folder of extractions", style="Status.TLabel").pack(anchor="w")
 
         self._path_row(frm, 1, "Input dir (extractions)", self.input_dir,
@@ -257,7 +260,7 @@ class BatchLeappGUI:
         opts.grid(row=4, column=0, columnspan=3, sticky="we", **pad)
         ttk.Label(opts, text="Type").pack(side="left")
         ttk.Combobox(opts, textvariable=self.ftype, width=6,
-                     values=("auto", "zip", "tar", "gz")).pack(side="left", padx=(4, 16))
+                     values=("auto", "zip", "tar", "gz", "raw")).pack(side="left", padx=(4, 16))
         ttk.Label(opts, text="Parallel jobs").pack(side="left")
         ttk.Spinbox(opts, from_=1, to=64, width=4, textvariable=self.jobs).pack(
             side="left", padx=(4, 16))
@@ -361,10 +364,11 @@ class BatchLeappGUI:
         if core.is_gui_build(p):
             messagebox.showerror(
                 "GUI build selected",
-                f"'{p.name}' is the interactive GUI build and can't be used "
-                f"for batch processing.\n\nChoose the command-line LEAPP tool "
-                f"instead — the CLI binary, or the ileapp.py / aleapp.py script "
-                f"from the tool's source folder.")
+                f"'{p.name}' is the older interactive GUI build and can't be "
+                f"used for batch processing.\n\nChoose a current LEAPP release "
+                f"(its app runs from the command line too), a CLI binary, or "
+                f"the ileapp.py / aleapp.py script from the tool's source "
+                f"folder.")
             return
         self.leapp.set(str(p))
 
@@ -382,9 +386,9 @@ class BatchLeappGUI:
         if self.leapp.get() and core.is_gui_build(Path(self.leapp.get())):
             messagebox.showerror(
                 "GUI build selected",
-                f"'{Path(self.leapp.get()).name}' is the interactive GUI build and "
-                f"can't be used for batch processing.\n\nChoose the command-line "
-                f"LEAPP tool instead.")
+                f"'{Path(self.leapp.get()).name}' is the older interactive GUI "
+                f"build and can't be used for batch processing.\n\nChoose a "
+                f"current LEAPP release, a CLI binary, or the tool's .py script.")
             return
 
         # Remember the paths that were actually used, most-recent first.

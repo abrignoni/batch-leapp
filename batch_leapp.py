@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """
-batch_leapp.py — recursively find every .zip in a directory and run a LEAPP
-tool (iLEAPP / ALEAPP / RLEAPP / VLEAPP) on each.
+batch_leapp.py: recursively find every extraction archive and disk image in a
+directory and run a LEAPP tool (iLEAPP / ALEAPP / RLEAPP / VLEAPP / DLEAPP) on
+each.
 
-Each zip gets its own output directory so you end up with a folder full of
+Each input gets its own output directory so you end up with a folder full of
 ready-to-review LEAPP report directories, plus a master index.html linking them.
 
 Example:
     python batch_leapp.py /Volumes/Cases/extractions /Volumes/Cases/reports \
         --leapp /path/to/iLEAPP/ileapp.py
 
-The LEAPP tool is invoked as:  python <x>leapp.py -t zip -i <zip> -o <out dir>
-which is the shared CLI of iLEAPP, ALEAPP, RLEAPP and VLEAPP.
+The LEAPP tool is invoked as:  python <x>leapp.py -t <type> -i <input> -o <out dir>
+which is the shared CLI of iLEAPP, ALEAPP, RLEAPP, VLEAPP and DLEAPP. <type> is
+picked per file: zip, tar or gz for an archive, raw for a disk image.
 """
 
 import argparse
@@ -46,10 +48,61 @@ FAVICON_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAA
 ARCHIVE_EXTS = (
     (".tar.gz", "gz"),
     (".tgz", "gz"),
+    (".tar.xz", "tar"),     # the tools' tar reader opens it by its compression
     (".tar", "tar"),
     (".zip", "zip"),
     (".gz", "gz"),
 )
+
+# Disk images and acquisitions the LEAPP tools read in place with '-t raw'.
+# Taken from RAW_IMAGE_SUFFIXES in the tools' scripts/raw_image.py, less three:
+# '.img' and '.bin' are searched for only when the type is forced to raw (see
+# GENERIC_IMAGE_EXTS), and '.sparsebundle' is left out because it is a folder. Each multi-file format is listed by its first file only ('.E01' not
+# '.E02', '.001' not '.002'), so a set is queued once.
+RAW_IMAGE_EXTS = (
+    ".dd", ".raw", ".001", ".e01", ".s01", ".ex01", ".aff", ".afm", ".aff4",
+    ".dmg", ".sparseimage", ".vhd", ".vhdx", ".vmdk", ".qcow", ".qcow2",
+    ".l01", ".ad1",
+)
+ARCHIVE_EXTS += tuple((ext, "raw") for ext in RAW_IMAGE_EXTS)
+# Plenty of files named '.img' or '.bin' are not disk images, so these count
+# only when the caller asks for raw images outright ('-t raw').
+GENERIC_IMAGE_EXTS = (".img", ".bin")
+
+# What the "nothing found" message and the help text list.
+INPUT_SUMMARY = ".zip, .tar, .tar.gz, .tar.xz, or a disk image such as .E01 or .dd"
+
+# A split VMware disk: 'name.vmdk' describes it and these files hold the data.
+_VMDK_EXTENT_RE = re.compile(r"^(?P<base>.+)-(?:[sf]\d+|flat|delta)\.vmdk$",
+                             re.IGNORECASE)
+# '.001' is also how split archives are numbered ('backup.zip.001').
+_SPLIT_ARCHIVE_RE = re.compile(r"\.(?:zip|7z|rar|tar|gz|xz|bz2)\.001$",
+                               re.IGNORECASE)
+# Files a LEAPP tool writes at the top of every output folder, whatever the
+# folder is called.
+LEAPP_OUTPUT_MARKERS = ("_lava_artifacts.db", "_lava_data.lava")
+
+
+def _is_secondary_image_file(here: Path, name: str, siblings) -> bool:
+    """True for a file that belongs to an image another file already stands for,
+    so the image is run once rather than once per file.
+
+    `siblings` holds the lowercased names of the files in the same folder.
+    """
+    low = name.lower()
+    if low.endswith(".001"):
+        if _SPLIT_ARCHIVE_RE.search(low):
+            return True                           # a split archive, not an image
+        if low[:-4] + ".afm" in siblings:
+            return True                           # the .afm stands for the set
+    if low.endswith(".aff") and here.name.lower().endswith(".afd"):
+        # an AFD folder: any one of its .aff files brings the whole folder
+        first = min(n for n in siblings if n.endswith(".aff"))
+        return low != first
+    match = _VMDK_EXTENT_RE.match(low)
+    if match and match.group("base") + ".vmdk" in siblings:
+        return True                               # the descriptor stands for it
+    return False
 
 
 def archive_kind(path: Path):
@@ -61,10 +114,12 @@ def archive_kind(path: Path):
     return None, None
 
 
-# Directories from a previous LEAPP run (e.g. 'iLEAPP_Reports_2026-..',
-# 'ALEAPP_Reports_..'). We never descend into these: they hold report artifacts
-# — including thousands of tiny browser-cache .gz files — that are NOT extractions.
-LEAPP_REPORT_DIR_RE = re.compile(r"leapp_reports_", re.IGNORECASE)
+# Directories from a previous LEAPP run ('iLEAPP_Output_2026-..' today,
+# 'iLEAPP_Reports_2026-..' from older releases). We never descend into these:
+# they hold report artifacts and the staged evidence files, including zips and
+# thousands of tiny browser-cache .gz files, that are NOT extractions. A folder
+# given a custom name is recognised by LEAPP_OUTPUT_MARKERS instead.
+LEAPP_REPORT_DIR_RE = re.compile(r"leapp_(?:output|reports)_", re.IGNORECASE)
 
 
 def _is_gzipped_tar(path: Path) -> bool:
@@ -74,38 +129,51 @@ def _is_gzipped_tar(path: Path) -> bool:
         return False
 
 
-def find_archives(root: Path, kinds=None, exclude=None):
-    """Return every supported *extraction* archive under root, sorted.
+def find_archives(root: Path, kinds=None, exclude=None, generic_images=False):
+    """Return every supported *extraction* archive or disk image under root, sorted.
 
     Yields (path, leapp_type, matched_ext). `kinds` optionally restricts to a set
     of -t values (e.g. {"zip"}). `exclude` is a set of directories to skip.
+    `generic_images` also takes '.img' and '.bin' files as raw images.
 
     Guards against grabbing things that aren't extractions:
       - skips macOS AppleDouble companions ('._name');
-      - does NOT descend into prior LEAPP report folders ('*LEAPP_Reports_*') or
+      - does NOT descend into prior LEAPP output folders ('*LEAPP_Output_*',
+        '*LEAPP_Reports_*', or any folder holding a LEAPP run's own files) or
         excluded dirs (e.g. the output dir);
       - a bare '.gz' counts only if it's a gzipped TAR — a lone gzipped file
-        (browser cache, a single log, etc.) is not a filesystem extraction.
+        (browser cache, a single log, etc.) is not a filesystem extraction;
+      - a disk image made of several files is listed once, by its first file.
     """
     exclude = {Path(e).resolve() for e in (exclude or [])}
     out = []
     for dirpath, dirnames, filenames in os.walk(root):
         here = Path(dirpath)
+        if any(marker in filenames for marker in LEAPP_OUTPUT_MARKERS):
+            dirnames[:] = []                      # a LEAPP output folder
+            continue
         # Prune: don't recurse into report folders or excluded subtrees.
         dirnames[:] = [
             dn for dn in dirnames
             if not LEAPP_REPORT_DIR_RE.search(dn)
             and (here / dn).resolve() not in exclude
         ]
+        siblings = {fn.lower() for fn in filenames}
         for fn in filenames:
             if fn.startswith("._"):
                 continue
             p = here / fn
             kind, ext = archive_kind(p)
+            if not kind and generic_images:
+                ext = next((e for e in GENERIC_IMAGE_EXTS
+                            if fn.lower().endswith(e)), None)
+                kind = "raw" if ext else None
             if not kind or (kinds is not None and kind not in kinds):
                 continue
             if ext == ".gz" and not _is_gzipped_tar(p):
                 continue                          # lone .gz → not an extraction
+            if kind == "raw" and _is_secondary_image_file(here, fn, siblings):
+                continue
             out.append((p, kind, ext))
     return sorted(out, key=lambda t: t[0].as_posix())
 
@@ -129,6 +197,10 @@ def is_valid_archive(path: Path, kind: str) -> bool:
                 return True
             with open(path, "rb") as f:           # plain gzip magic
                 return f.read(2) == b"\x1f\x8b"
+        if kind == "raw":
+            # The formats share no signature; the tool's own reader decides
+            # what it can read. An empty file is the one certain failure.
+            return path.is_file() and path.stat().st_size > 0
     except OSError:
         return False
     return False
@@ -149,6 +221,7 @@ LEAPP_NAMES = {
     "aleapp": "ALEAPP",
     "rleapp": "RLEAPP",
     "vleapp": "VLEAPP",
+    "dleapp": "DLEAPP",
 }
 
 
@@ -310,15 +383,26 @@ def isolated_env(dest: Path):
     """Return an environment that points the LEAPP tool's *shared* config dir
     (history.json / settings.json) at a private folder under dest.
 
-    LEAPP tools keep one shared history file and update it with a
-    read-modify-write that uses a fixed temp filename. Two tools running at
-    once race on that file and corrupt it. Giving each parallel run its own
-    config dir removes the contention entirely. The dir is derived from HOME
+    LEAPP tools keep one shared history file. Every command-line run adds its
+    input path, its output path and a recent-run entry to it, in lists that
+    hold 10 paths and 20 runs, so a batch would push out whatever the examiner
+    had there; and tools running at once update the file with a
+    read-modify-write. A private, empty config dir per run avoids both: history
+    is off by default, so nothing is recorded. The dir is derived from HOME
     (macOS), APPDATA (Windows) and XDG_CONFIG_HOME (Linux), so we set all three.
+
+    Python finds a user's own site-packages through HOME (APPDATA on Windows)
+    too, so the real location is pinned for a tool run from source.
     """
     private = dest / ".leapp_home"
     private.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
+    if "PYTHONUSERBASE" not in env and not getattr(sys, "frozen", False):
+        try:
+            import site
+            env["PYTHONUSERBASE"] = site.getuserbase()
+        except (ImportError, AttributeError):
+            pass
     env["HOME"] = str(private)             # macOS: ~/Library/Application Support/LEAPP
     env["APPDATA"] = str(private)          # Windows: %APPDATA%/LEAPP
     env["XDG_CONFIG_HOME"] = str(private)  # Linux: $XDG_CONFIG_HOME/LEAPP
@@ -337,11 +421,11 @@ def _terminate(proc):
         pass
 
 
-def run_job(job: dict, timeout, capture: bool, isolate: bool = False,
+def run_job(job: dict, timeout, capture: bool, isolate: bool = True,
             should_stop=None) -> dict:
     """Run one LEAPP subprocess. When capture is True (parallel mode) the
     combined output is captured and written to a per-job log file so concurrent
-    runs don't garble the terminal. When isolate is True each run gets a private
+    runs don't garble the terminal. When isolate is True (always, in a batch) each run gets a private
     config dir so concurrent runs don't corrupt the shared history file.
 
     The child is launched with Popen and polled, so `should_stop()` can
@@ -350,7 +434,11 @@ def run_job(job: dict, timeout, capture: bool, isolate: bool = False,
     Returns a result dict."""
     start = time.time()
     env = isolated_env(job["dest"]) if isolate else None
-    kw = {"env": env, "text": True}
+    # No terminal on stdin: a tool that would ask for an image password at a
+    # prompt reports the image as locked instead of stopping the batch to wait.
+    # A closed pipe, not DEVNULL: on Windows the NUL device answers isatty()
+    # with True, so a tool checking for a terminal would still think it has one.
+    kw = {"env": env, "text": True, "stdin": subprocess.PIPE}
     if capture:
         kw["stdout"] = subprocess.PIPE
         kw["stderr"] = subprocess.STDOUT
@@ -361,6 +449,11 @@ def run_job(job: dict, timeout, capture: bool, isolate: bool = False,
     except OSError as e:
         return {"job": job, "rc": None, "elapsed": time.time() - start,
                 "error": f"could not start: {e}"}
+    try:
+        proc.stdin.close()
+    except OSError:
+        pass
+    proc.stdin = None                  # communicate() has nothing to send
 
     output, error = None, None
     while True:
@@ -397,6 +490,7 @@ TOOL_ACCENT = {
     "ALEAPP": "#A4C639",
     "RLEAPP": "#4BA3C7",
     "VLEAPP": "#531dab",
+    "DLEAPP": "#B173A9",
 }
 
 
@@ -757,8 +851,9 @@ def run_batch(input_dir, output_dir, leapp, *, python=None,
     result dict with keys: ok, failed, invalid, skipped, index, manifest, start,
     end, elapsed, total, tool, coverage_db.
 
-    `type` "auto" picks -t per file from its extension (zip/tar/gz); any other
-    value forces that -t for every archive. `hashes` records SHA-256 of each
+    `type` "auto" picks -t per file from its extension (zip/tar/gz/raw); any other
+    value forces that -t for every archive ("raw" runs the disk images only,
+    '.img' and '.bin' files included). `hashes` records SHA-256 of each
     input. `extra_args` (list) is appended to every LEAPP command line.
     `coverage` enables the developer App Inventory artifacts on each run and
     aggregates every report into batch_apps.sqlite afterwards.
@@ -781,19 +876,25 @@ def run_batch(input_dir, output_dir, leapp, *, python=None,
         raise BatchError(f"Input is not a directory: {input_dir}")
     if is_gui_build(leapp):
         raise BatchError(
-            f"'{leapp.name}' is the interactive GUI build, which can't be run in "
-            f"batch. Select the command-line LEAPP tool instead "
-            f"(e.g. ileapp.py or the CLI binary).")
+            f"'{leapp.name}' is the older interactive GUI build, which can't be "
+            f"run in batch. Select a current LEAPP release, a CLI binary, or "
+            f"the tool's script (e.g. ileapp.py) instead.")
     if not dry_run and not leapp_target_ok(leapp):
         raise BatchError(f"LEAPP tool not found: {leapp}")
 
-    archives = find_archives(input_dir, exclude=[output_dir])
+    if force_type == "raw":
+        # Forcing raw means "the disk images here", '.img' and '.bin' included;
+        # an archive handed to the tool as a disk image would read as nothing.
+        archives = find_archives(input_dir, {"raw"}, exclude=[output_dir],
+                                 generic_images=True)
+    else:
+        archives = find_archives(input_dir, exclude=[output_dir])
     result = {"ok": [], "failed": [], "invalid": [], "skipped": [],
               "index": None, "manifest": None, "start": None, "end": None,
               "elapsed": 0.0, "total": len(archives), "tool": tool,
               "coverage_db": None}
     if not archives:
-        log(f"No archives (.zip/.tar/.gz) found under {input_dir}")
+        log(f"No extractions ({INPUT_SUMMARY}) found under {input_dir}")
         return result
 
     coverage_cleanup = None
@@ -921,7 +1022,7 @@ def run_batch(input_dir, output_dir, leapp, *, python=None,
             active[rel_str] = time.monotonic()
         log(f"[{job['n']}/{total}] START    {rel_str}")
         try:
-            res = run_job(job, timeout, capture, isolate=capture,
+            res = run_job(job, timeout, capture, isolate=True,
                           should_stop=should_stop)
         finally:
             with active_lock:
@@ -1014,13 +1115,15 @@ def run_batch(input_dir, output_dir, leapp, *, python=None,
 
 def build_arg_parser():
     parser = argparse.ArgumentParser(
-        description="Recursively run a LEAPP tool (iLEAPP/ALEAPP/RLEAPP/VLEAPP) "
-                    "on every archive in a directory.",
+        description="Recursively run a LEAPP tool (iLEAPP/ALEAPP/RLEAPP/VLEAPP/"
+                    "DLEAPP) on every extraction archive and disk image in a "
+                    "directory.",
         epilog="Anything after a literal '--' is passed verbatim to every LEAPP "
-               "run, e.g.:  batch_leapp.py in out --leapp ileapp.py -- -p fast",
+               "run, e.g.:  batch_leapp.py in out --leapp ileapp.py -- -m case.ilprofile",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("input_dir", type=Path, help="Directory to search recursively for .zip files")
+    parser.add_argument("input_dir", type=Path, help="Directory to search recursively for extractions ("
+                             + INPUT_SUMMARY + ")")
     parser.add_argument("output_dir", type=Path, help="Directory to write the report folders into")
     parser.add_argument(
         "--leapp", "--ileapp", dest="leapp", type=Path, default=Path("ileapp.py"),
@@ -1033,19 +1136,20 @@ def build_arg_parser():
                              "when running as a packaged binary)")
     parser.add_argument("-t", "--type", default="auto",
                         help="LEAPP extraction type for -t. 'auto' (default) "
-                             "picks zip/tar/gz per file; any other value forces "
-                             "that type for every archive")
+                             "picks zip/tar/gz/raw per file; any other value forces "
+                             "that type for every archive ('raw' runs only the "
+                             "disk images, .img and .bin files included)")
     parser.add_argument("-j", "--jobs", type=int, default=1,
                         help="Number of LEAPP runs to execute in parallel")
     parser.add_argument("--heartbeat", type=int, default=30, metavar="SECONDS",
                         help="In parallel mode, print a 'still running' line "
                              "every N seconds (0 to disable)")
     parser.add_argument("--timeout", type=int, default=None,
-                        help="Per-zip timeout in seconds (default: no timeout)")
+                        help="Per-input timeout in seconds (default: no timeout)")
     parser.add_argument("--no-hash", dest="hashes", action="store_false",
                         help="Do not compute SHA-256 of each input archive")
     parser.add_argument("--skip-existing", action="store_true",
-                        help="Skip a zip if its output dir already exists and is non-empty")
+                        help="Skip an input if its output dir already exists and is non-empty")
     parser.add_argument("--dry-run", action="store_true",
                         help="List what would run without invoking the LEAPP tool")
     parser.add_argument("--coverage", action="store_true",
