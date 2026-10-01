@@ -379,7 +379,33 @@ def lava_installed() -> bool:
     return False
 
 
-def isolated_env(dest: Path):
+_USERBASE_CACHE = {}
+
+
+def python_userbase(python: str):
+    """The user site-packages base of the interpreter that runs a .py LEAPP
+    tool, asked of that interpreter with the real environment; None when it
+    cannot say. Asked once per interpreter.
+
+    batch-leapp's own interpreter is not the one to ask: a packaged
+    batch-leapp has none, and --python may name another one.
+    """
+    if python not in _USERBASE_CACHE:
+        base = None
+        try:
+            proc = subprocess.run(
+                [python, "-c", "import site; print(site.getuserbase())"],
+                capture_output=True, text=True, timeout=30, check=False,
+                stdin=subprocess.DEVNULL)
+            if proc.returncode == 0:
+                base = proc.stdout.strip() or None
+        except (OSError, subprocess.SubprocessError):
+            base = None
+        _USERBASE_CACHE[python] = base
+    return _USERBASE_CACHE[python]
+
+
+def isolated_env(dest: Path, userbase=None):
     """Return an environment that points the LEAPP tool's *shared* config dir
     (history.json / settings.json) at a private folder under dest.
 
@@ -392,17 +418,14 @@ def isolated_env(dest: Path):
     (macOS), APPDATA (Windows) and XDG_CONFIG_HOME (Linux), so we set all three.
 
     Python finds a user's own site-packages through HOME (APPDATA on Windows)
-    too, so the real location is pinned for a tool run from source.
+    too, so for a tool run from source the real location (`userbase`, from
+    python_userbase) is pinned as PYTHONUSERBASE unless one is already set.
     """
     private = dest / ".leapp_home"
     private.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
-    if "PYTHONUSERBASE" not in env and not getattr(sys, "frozen", False):
-        try:
-            import site
-            env["PYTHONUSERBASE"] = site.getuserbase()
-        except (ImportError, AttributeError):
-            pass
+    if userbase and "PYTHONUSERBASE" not in env:
+        env["PYTHONUSERBASE"] = userbase
     env["HOME"] = str(private)             # macOS: ~/Library/Application Support/LEAPP
     env["APPDATA"] = str(private)          # Windows: %APPDATA%/LEAPP
     env["XDG_CONFIG_HOME"] = str(private)  # Linux: $XDG_CONFIG_HOME/LEAPP
@@ -433,7 +456,7 @@ def run_job(job: dict, timeout, capture: bool, isolate: bool = True,
     this, closing the GUI would leave iLEAPP running as an orphan.
     Returns a result dict."""
     start = time.time()
-    env = isolated_env(job["dest"]) if isolate else None
+    env = isolated_env(job["dest"], job.get("userbase")) if isolate else None
     # No terminal on stdin: a tool that would ask for an image password at a
     # prompt reports the image as locked instead of stopping the batch to wait.
     # A closed pipe, not DEVNULL: on Windows the NUL device answers isatty()
@@ -918,6 +941,9 @@ def run_batch(input_dir, output_dir, leapp, *, python=None,
     invalid, skipped = result["invalid"], result["skipped"]
     entries = {}   # keyed by dest so parallel results land in the right row
     prefix = leapp_command_prefix(leapp, python)
+    # Only a tool run from source imports from the user's site-packages.
+    userbase = (python_userbase(python)
+                if leapp.suffix.lower() == ".py" and not dry_run else None)
     work = []
 
     def stem_for(rel: Path, ext: str) -> str:
@@ -969,7 +995,8 @@ def run_batch(input_dir, output_dir, leapp, *, python=None,
             continue
 
         work.append({"zip": zip_path, "rel": rel, "root": root, "type": t,
-                     "dest": dest, "cmd": cmd, "log_name": log_name})
+                     "dest": dest, "cmd": cmd, "log_name": log_name,
+                     "userbase": userbase})
 
     for i, job in enumerate(work, 1):
         job["n"] = i

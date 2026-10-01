@@ -197,7 +197,8 @@ class Running(unittest.TestCase):
             self.assertEqual(info["home"], private)
             self.assertEqual(info["appdata"], private)
             self.assertEqual(info["xdg"], private)
-            self.assertTrue(info["userbase"])
+            # what the tool's own interpreter reports with the real environment
+            self.assertEqual(info["userbase"], core.python_userbase(sys.executable))
             self.assertFalse(info["userbase"].startswith(private))
             self.assertFalse(info["stdin_tty"])
 
@@ -218,6 +219,22 @@ class Running(unittest.TestCase):
         result, seen = self.run_batch(type="raw")
         self.assertEqual(sorted(seen), ["disk", "userdata"])
         self.assertEqual(result["total"], 2)
+
+    def test_the_userbase_comes_from_the_tools_interpreter_not_this_one(self):
+        # A packaged batch-leapp has no interpreter of its own to ask.
+        core._USERBASE_CACHE.clear()  # pylint: disable=protected-access
+        self.addCleanup(core._USERBASE_CACHE.clear)  # pylint: disable=protected-access
+        with mock.patch("site.getuserbase", side_effect=AssertionError("asked here")), \
+             mock.patch.object(core.sys, "frozen", True, create=True):
+            _, seen = self.run_batch(jobs=1, python=sys.executable)
+        import site  # pylint: disable=import-outside-toplevel
+        self.assertEqual({info["userbase"] for info in seen.values()},
+                         {site.getuserbase()})
+
+    def test_a_binary_tool_gets_no_userbase(self):
+        with mock.patch.dict(os.environ):
+            os.environ.pop("PYTHONUSERBASE", None)
+            self.assertNotIn("PYTHONUSERBASE", core.isolated_env(self.out / "x"))
 
     def test_a_set_pythonuserbase_is_left_as_given(self):
         with mock.patch.dict(os.environ, {"PYTHONUSERBASE": "/given/base"}):
