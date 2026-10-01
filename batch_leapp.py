@@ -436,7 +436,9 @@ def run_job(job: dict, timeout, capture: bool, isolate: bool = True,
     env = isolated_env(job["dest"]) if isolate else None
     # No terminal on stdin: a tool that would ask for an image password at a
     # prompt reports the image as locked instead of stopping the batch to wait.
-    kw = {"env": env, "text": True, "stdin": subprocess.DEVNULL}
+    # A closed pipe, not DEVNULL: on Windows the NUL device answers isatty()
+    # with True, so a tool checking for a terminal would still think it has one.
+    kw = {"env": env, "text": True, "stdin": subprocess.PIPE}
     if capture:
         kw["stdout"] = subprocess.PIPE
         kw["stderr"] = subprocess.STDOUT
@@ -447,6 +449,11 @@ def run_job(job: dict, timeout, capture: bool, isolate: bool = True,
     except OSError as e:
         return {"job": job, "rc": None, "elapsed": time.time() - start,
                 "error": f"could not start: {e}"}
+    try:
+        proc.stdin.close()
+    except OSError:
+        pass
+    proc.stdin = None                  # communicate() has nothing to send
 
     output, error = None, None
     while True:
