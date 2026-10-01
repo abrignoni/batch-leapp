@@ -8,8 +8,8 @@
 
 When a new LEAPP release comes out I like to run it against my collection of test images to see what changed, what broke, and what improved. Doing that by hand, one extraction at a time, one output folder at a time, gets old fast. Batch LEAPP automates it:
 
-- Finds every extraction archive (.zip, .tar, .gz) under a folder, recursively.
-- Runs the LEAPP tool of your choice on each one (iLEAPP, ALEAPP, RLEAPP, or VLEAPP, all the same command line).
+- Finds every extraction archive (.zip, .tar, .tar.gz, .tar.xz) and disk image (.E01, .dd and the other formats the tools read with `-t raw`) under a folder, recursively.
+- Runs the LEAPP tool of your choice on each one (iLEAPP, ALEAPP, RLEAPP, VLEAPP, or DLEAPP, all the same command line).
 - Gives every extraction its own output folder so nothing collides.
 - Writes a master `index.html` linking every report, plus a manifest (CSV and JSON) with the SHA-256 of every input archive, per-run timing, and status.
 

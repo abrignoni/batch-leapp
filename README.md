@@ -6,7 +6,7 @@
 
 <img src="docs/icon.png" alt="Batch LEAPP icon" width="110" align="right">
 
-Recursively find every `.zip` in a directory and run a **LEAPP** tool — [iLEAPP](https://github.com/abrignoni/iLEAPP), [ALEAPP](https://github.com/abrignoni/ALEAPP), [RLEAPP](https://github.com/abrignoni/RLEAPP), or [VLEAPP](https://github.com/abrignoni/VLEAPP) — on each one, producing a folder full of ready-to-review report directories plus a single master `index.html` that links them all.
+Recursively find every extraction archive and disk image in a directory and run a **LEAPP** tool ([iLEAPP](https://github.com/abrignoni/iLEAPP), [ALEAPP](https://github.com/abrignoni/ALEAPP), [RLEAPP](https://github.com/abrignoni/RLEAPP), [VLEAPP](https://github.com/abrignoni/VLEAPP) or [DLEAPP](https://github.com/abrignoni/DLEAPP)) on each one, producing a folder full of ready-to-review report directories plus a single master `index.html` that links them all.
 
 Point it at a directory of extractions, walk away, and come back to a review-ready set of LEAPP reports.
 
@@ -22,8 +22,6 @@ Point it at a directory of extractions, walk away, and come back to a review-rea
 
 - [Batch LEAPP: process all your test images at once](docs/batch-leapp-guide.md) — what it is, release regression testing, and the `--coverage` mode.
 - [Reading the coverage database in LAVA](docs/coverage-analysis-lava.md) — what the reports mean and the analyses to run with them.
-- [Populating artifact `sample_data` from a test-image corpus](docs/sample-data.md) — auto-record per-image OS/app versions and row counts in the iLEAPP/ALEAPP artifact metadata.
-- [Step-by-step: populating `sample_data` from your own test images](docs/sample-data-walkthrough.md) — the hands-on developer walkthrough, from a folder of zips to the metadata PR, with troubleshooting.
 
 ## Download
 
@@ -40,8 +38,9 @@ First launch is unsigned — see [first-run notes](#signing--first-run-warnings)
 
 ## What it does
 
-- **Recursively** finds every *extraction* archive (`.zip`, `.tar`, `.tar.gz`/`.tgz`, gzipped-tar `.gz`) under the input directory and auto-selects the matching `-t` type per file. It deliberately **ignores prior LEAPP report folders** (`*LEAPP_Reports_*`) and lone non-tar `.gz` files (browser-cache blobs, single logs) so it doesn't mistake report artifacts for extractions.
-- Runs your chosen LEAPP tool on each archive into **its own output folder**, so reports never overwrite each other.
+- **Recursively** finds every *extraction* archive (`.zip`, `.tar`, `.tar.gz`/`.tgz`, `.tar.xz`, gzipped-tar `.gz`) and every **disk image or acquisition** (`.E01`, `.s01`, `.Ex01`, `.dd`, `.raw`, `.001`, `.aff`, `.afm`, `.aff4`, `.dmg`, `.sparseimage`, `.vhd`, `.vhdx`, `.vmdk`, `.qcow`, `.qcow2`, `.L01`, `.ad1`) under the input directory, and auto-selects the matching `-t` type per file. See [Disk images](#disk-images) for the details. It deliberately **ignores prior LEAPP output folders** (`*LEAPP_Output_*`, the older `*LEAPP_Reports_*`, and any folder holding a LEAPP run's own files) and lone non-tar `.gz` files (browser-cache blobs, single logs) so it doesn't mistake report artifacts for extractions.
+- Runs your chosen LEAPP tool on each archive or image into **its own output folder**, so reports never overwrite each other.
+- **Leaves your LEAPP history alone.** Every run gets a private settings folder, so a batch does not fill the recent paths and recent runs of the LEAPP tools.
 - **Hashes every input** (SHA-256) and writes a **manifest** (`manifest.csv` + `manifest.json`) documenting what was processed — chain-of-custody for your case file.
 - **Pre-checks each archive** and flags a corrupt/mislabeled one as `invalid` instead of letting the LEAPP run crash.
 - Writes a **master `index.html`** at the root of the output directory with one row per extraction, linking the report folder, the LEAPP `index.html`, and the `_lava_data.lava` file — plus the input's SHA-256.
@@ -49,7 +48,7 @@ First launch is unsigned — see [first-run notes](#signing--first-run-warnings)
 - **Keeps going on failure** — one bad archive won't stop the batch — and prints an ok/failed/invalid/skipped summary at the end.
 - Optionally runs **multiple LEAPP processes in parallel**, and can pass **extra arguments** straight through to the tool.
 
-iLEAPP, ALEAPP, RLEAPP and VLEAPP all share the same command line — `python <x>leapp.py -t zip -i <zip> -o <out>` — so the same script drives any of them. The tool is auto-detected from the script filename you pass to `--leapp` and used for labels, the per-job log filename, and the index title.
+iLEAPP, ALEAPP, RLEAPP, VLEAPP and DLEAPP all share the same command line, `python <x>leapp.py -t <type> -i <input> -o <out>`, so the same script drives any of them. The tool is auto-detected from the script filename you pass to `--leapp` and used for labels, the per-job log filename, and the index title.
 
 ---
 
@@ -57,9 +56,9 @@ iLEAPP, ALEAPP, RLEAPP and VLEAPP all share the same command line — `python <x
 
 - Python 3.8+ (standard library only — nothing to `pip install`).
 - A working LEAPP tool. You point `--leapp` at **either**:
-  - a script — `ileapp.py`, `aleapp.py`, `rleapp.py`, `vleapp.py`, or
-  - a **compiled CLI binary** / macOS **`.app`** from a LEAPP release (`ileapp`, `iLEAPP.exe`, `iLEAPP.app`, …).
-  - (Use the command-line build, not the interactive GUI build — the GUI doesn't take batch arguments. batch-leapp warns if the name looks like a GUI.)
+  - a script: `ileapp.py`, `aleapp.py`, `rleapp.py`, `vleapp.py`, `dleapp.py`, or
+  - a **LEAPP release**: the macOS **`.app`**, the Windows `ileapp.exe`, or the Linux AppImage. From iLEAPP v2026.4.3 and v2026.4.2 of the other four, a release is one program that opens its window when started without arguments and is the command line when given them, so batch-leapp can drive it directly.
+  - Older releases shipped a separate window-only build (`ileappGUI`), which takes no batch arguments. batch-leapp refuses a tool whose name contains `gui`.
 - If a `.py` tool lives in its own virtual environment, point `--python` at that environment's interpreter (ignored for binaries).
 - The optional GUI uses **Tkinter** (bundled with most Python installs; on some Linux distros: `sudo apt install python3-tk`).
 
@@ -85,8 +84,8 @@ Prefer a double-clickable app with no terminal? See **[Building standalone binar
 python batch_leapp.py INPUT_DIR OUTPUT_DIR --leapp /path/to/<x>leapp.py
 ```
 
-- `INPUT_DIR` — directory searched recursively for `.zip` files.
-- `OUTPUT_DIR` — where the per-zip report folders and the master `index.html` are written (created if it doesn't exist).
+- `INPUT_DIR`: directory searched recursively for extraction archives and disk images.
+- `OUTPUT_DIR`: where the per-input report folders and the master `index.html` are written (created if it doesn't exist).
 
 ### Examples
 
@@ -125,15 +124,15 @@ open /Volumes/Cases/ios_reports/index.html
 |---|---|---|
 | `--leapp PATH` | `ileapp.py` | Path to the LEAPP **script** (`ileapp.py` …) **or compiled binary / macOS `.app`**. `--ileapp` is accepted as an alias. |
 | `--python PATH` | current interpreter | Python used to run a `.py` tool (point at the tool's venv if it has one). Ignored for binaries. |
-| `-t`, `--type TYPE` | `auto` | `auto` picks the `-t` value (`zip`/`tar`/`gz`) per file from its extension. Any other value forces that type for every archive. |
+| `-t`, `--type TYPE` | `auto` | `auto` picks the `-t` value (`zip`/`tar`/`gz`/`raw`) per file from its extension. Any other value forces that type for every archive. `raw` runs only the disk images, and also takes `.img` and `.bin` files. |
 | `-j`, `--jobs N` | `1` | Number of LEAPP runs to execute in parallel. |
 | `--heartbeat SECONDS` | `30` | In parallel mode, print a "still running" line every N seconds so long runs don't look hung (`0` disables). |
-| `--timeout SECONDS` | none | Per-zip timeout; a run exceeding it is marked failed and the batch continues. |
+| `--timeout SECONDS` | none | Per-input timeout; a run exceeding it is marked failed and the batch continues. |
 | `--no-hash` | off | Skip computing the SHA-256 of each input archive (hashing is on by default). |
-| `--skip-existing` | off | Skip a zip whose output folder already exists and is non-empty (resume a partial run). |
+| `--skip-existing` | off | Skip an input whose output folder already exists and is non-empty (resume a partial run). |
 | `--dry-run` | off | Print the exact commands without running the tool. |
 | `--coverage` | off | **Developer mode.** Enable the LEAPP App Inventory artifacts on each run and aggregate every report into `batch_apps.sqlite` (see [Coverage mode](#coverage-mode-developers)). |
-| `-- <args>` | — | Everything after a literal `--` is appended verbatim to every LEAPP run (e.g. `-- -p fast` for an iLEAPP profile). |
+| `-- <args>` | none | Everything after a literal `--` is appended verbatim to every LEAPP run (e.g. `-- -m /path/to/case.ilprofile` for an iLEAPP profile). |
 
 > **Passing extra args:** batch-leapp owns `-o` (it gives each extraction its own output folder), so don't pass your own `-o` through `--` — it would send every report to the same place. To rename the report folder use iLEAPP's `--custom_output_folder` instead (e.g. `-- --custom_output_folder MyReports`); it renames the folder *inside* each per-zip output dir, so there's no collision and the index/manifest still find every report.
 
@@ -178,36 +177,15 @@ python3 batch_coverage.py ~/reports
 
 The aggregate also records per-artifact results (`artifact_results`),
 installed-app versions (`app_versions`) and artifact run errors
-(`artifact_errors`) — the inputs for `sample_data` population below.
+(`artifact_errors`).
+
+To fill an artifact's `sample_data` from a test image, use the LEAPP repos' own
+`admin/scripts/validate_sample_data.py --emit`, which works from a run of the
+artifact itself. The updater that used to ship here has been removed.
 
 Notes: requires LEAPP **source checkouts** that contain the App Inventory
 module (compiled binaries don't bundle it); RLEAPP/VLEAPP batches aggregate
 run metadata but have no app inventory by design.
-
----
-
-## Artifact `sample_data` population (developers)
-
-`sample_data_update.py` turns coverage databases into `sample_data` entries in
-the iLEAPP/ALEAPP artifact metadata — per test image: device OS version, the
-owning app's version and the row count the artifact produced:
-
-```bash
-python3 sample_data_update.py \
-    --db /corpus_out/ios/batch_apps.sqlite --db /corpus_out/android/batch_apps.sqlite \
-    --samples /corpus/samples.json \
-    --ileapp ~/GitHub/iLEAPP --aleapp ~/GitHub/ALEAPP          # dry run; add --apply to edit
-```
-
-An artifact gets an entry for every registered sample whose extraction
-matched at least one of its files (0-row outcomes included). Only sample keys
-registered in `samples.json` are managed; hand-written notes are preserved.
-Edits are metadata-only, style-preserving and idempotent, and `--apply`
-validates with ast re-parse, `py_compile`, a PluginLoader plugin-count smoke
-test and a pylint new-warning check (restoring the originals on failure).
-
-See [docs/sample-data.md](docs/sample-data.md) for the samples.json format,
-the entry grammar and the full runbook.
 
 ---
 
@@ -274,9 +252,22 @@ Artifacts produced: `Batch-LEAPP-macos-arm64.zip` (the `.app`), `batch-leapp-mac
 
 ---
 
+## Disk images
+
+A file with one of the image extensions above is handed to the tool with `-t raw`, which reads it in place without mounting. This needs a LEAPP release that takes `-t raw` (v2026.4.0 or later); an older tool rejects the argument and the run is marked failed.
+
+- **Multi-file images are run once.** A segmented set is found by its first file (`.E01` not `.E02`, `.001` not `.002`, `.L01`, `.ad1`), a split `.vmdk` by its descriptor, an `.afm` in place of its numbered data files, and an AFD folder (a folder named `*.afd`) by one of its `.aff` files. Keep the rest of the set beside it; the tool joins it.
+- **The SHA-256 in the manifest covers the file that was handed to the tool**, so for a multi-file image it is the hash of the first file, not of the whole set.
+- **`.img` and `.bin` are not picked up on `auto`**, because plenty of files with those names are not disk images. Run the folder again with `-t raw` to process them; that run takes only the disk images.
+- **`.sparsebundle` folders and striped `.aff4` sets** are not handled: a sparsebundle is a folder, so run it through the tool directly, and each `.aff4` file is queued on its own.
+- **Encrypted images** need their key passed through, e.g. `-- --image_password_file /path/to/passwords.txt`. batch-leapp gives the tool no terminal to prompt on, so a locked image is reported by the tool rather than stopping the batch to wait for a password.
+- **Split archives** (`backup.zip.001`) are not disk images and are skipped.
+
+---
+
 ## Recommended first run
 
-Always sanity-check the zip list and commands before turning it loose on a case load:
+Always sanity-check the list of inputs and the commands before turning it loose on a case load:
 
 ```bash
 python batch_leapp.py INPUT_DIR OUTPUT_DIR --leapp /path/to/<x>leapp.py --dry-run
@@ -294,15 +285,15 @@ python batch_leapp.py INPUT_DIR OUTPUT_DIR --leapp /path/to/<x>leapp.py -j 4
 - In parallel mode each run's output is captured to `<tool>_run.log` (e.g. `aleapp_run.log`) inside that extraction's folder, so concurrent runs don't garble the terminal; the screen shows just `OK` / `FAILED` / `TIMEOUT` per zip as they finish.
 - With `-j 1` (the default), the tool's output streams live as usual.
 
-### Why parallel runs need isolation
+### Every run is isolated from your LEAPP history
 
-LEAPP tools keep one **shared** history/settings file (e.g. macOS `~/Library/Application Support/LEAPP/history.json`) and update it with a read-modify-write that uses a fixed temp filename. Two tools running at once race on that file — one wins the rename, the other dies with `history.tmp -> history.json: No such file`, and a later read sees a half-written file (`JSONDecodeError: Extra data`).
+LEAPP tools keep one **shared** history/settings file (e.g. macOS `~/Library/Application Support/LEAPP/history.json`). When history is turned on, every command-line run adds its input path, its output path and a recent-run entry to it, in lists that hold 10 paths and 20 runs. A batch of a dozen images would push out everything you had there, and tools running at once would all be rewriting the same file.
 
-To avoid this, **parallel runs (`-j > 1`) each get a private config dir** at `<output>/<zip>/.leapp_home/`, set via `HOME` / `APPDATA` / `XDG_CONFIG_HOME`. Consequences:
+So **every run, sequential or parallel, gets a private config dir** at `<output>/<input>/.leapp_home/`, set via `HOME` / `APPDATA` / `XDG_CONFIG_HOME`. Consequences:
 
-- Concurrent runs never touch the same history file, so no corruption.
-- Your real, user-level LEAPP history is left untouched and parallel runs are **not** recorded in it (an empty private config dir means history recording is simply off for those runs).
-- Sequential runs (`-j 1`) use your normal config dir and record history as usual.
+- Your real, user-level LEAPP history is left untouched, and batch runs are **not** recorded in it (an empty private config dir means history recording is off for those runs).
+- Concurrent runs never touch the same history file.
+- A tool run from source still finds packages installed in your user site-packages: batch-leapp passes the real location along as `PYTHONUSERBASE`.
 
 > **Caution:** LEAPP runs are CPU-, disk-, and RAM-heavy. On a typical workstation `-j 2`–`-j 4` is a sane range. Pushing to your full core count can thrash disk I/O and run *slower* — and large extractions can exhaust memory. Start conservative.
 

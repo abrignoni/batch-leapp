@@ -21,9 +21,7 @@ Two responsibilities:
    were NOT parsed by the tooling?".
 
    The aggregate also records per-artifact results (files matched + rows
-   produced), installed-app versions and artifact run errors — the inputs
-   sample_data_update.py uses to populate each artifact's `sample_data`
-   metadata in the LEAPP repos.
+   produced), installed-app versions and artifact run errors.
 
 Standalone usage (re-aggregate an existing batch output directory):
 
@@ -204,7 +202,7 @@ CREATE TABLE artifact_results (
     files_matched INTEGER,
     row_count     INTEGER
 );
--- installed-app versions per extraction (feeds sample_data notes)
+-- installed-app versions per extraction
 CREATE TABLE app_versions (
     extraction_id INTEGER,
     app_id        TEXT,   -- bundle id / package name
